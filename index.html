@@ -98,7 +98,6 @@
     font-weight: bold;
     cursor: pointer;
     position: relative;
-    transition: transform 0.08s;
   }
 
   /* Covered / Dirt — not yet reachable (dark, uninteractable) */
@@ -127,7 +126,7 @@
     cursor: pointer;
     filter: none;
   }
-  .cell.hidden.reachable:active { transform: scale(0.90); filter: brightness(0.75); }
+  .cell.hidden.reachable:active { filter: brightness(0.75); }
   .cell.hidden.reachable::after {
     content: '';
     position: absolute;
@@ -155,11 +154,6 @@
     border: 2px solid #00ffaa;
     box-shadow: 0 0 8px #00ffaa80;
     font-size: 18px;
-    animation: ore-pulse 1.2s ease-in-out infinite;
-  }
-  @keyframes ore-pulse {
-    0%,100% { transform: scale(1); }
-    50%      { transform: scale(1.06); }
   }
 
 
@@ -169,13 +163,6 @@
     border: 2px solid #ff4400;
     box-shadow: 0 0 12px #ff440099;
     font-size: 18px;
-    animation: explode 0.22s ease-out forwards;
-  }
-  @keyframes explode {
-    0%   { transform: scale(1); }
-    30%  { transform: scale(1.4); }
-    60%  { transform: scale(1.1); }
-    100% { transform: scale(1); }
   }
 
   /* Bomb revealed (game over, not hit) */
@@ -201,11 +188,6 @@
   .cell.collected {
     background: radial-gradient(circle, #ffffaa, #ffff00, #80ff40);
     border: 2px solid #ffff00;
-    animation: collect-flash 0.18s ease-out forwards;
-  }
-  @keyframes collect-flash {
-    0%   { transform: scale(1.3); opacity: 1; }
-    100% { transform: scale(0.8); opacity: 0; }
   }
 
   /* ── Buttons ── */
@@ -515,6 +497,10 @@ function applyCell(el, i) {
     } else if (c.type === 'ore') {
       el.classList.add('ore');
       el.textContent = oreEmoji(i);
+      el._pulse = el.animate(
+        [{ transform: 'scale(1)' }, { transform: 'scale(1.06)' }, { transform: 'scale(1)' }],
+        { duration: 1200, easing: 'ease-in-out', iterations: Infinity }
+      );
     } else {
       el.classList.add('revealed');
       const total = c.adjOre + c.adjBomb;
@@ -554,12 +540,34 @@ function updateHUD() {
 let pressTimer = null;
 let _tapIdx = -1;
 let _touchHandled = false;
+let _pressAnimated = false;
+
+function animateCellPress(idx) {
+  const el = gridEl.children[idx];
+  const c = cells[idx];
+  if (!el || !c || !c.reachable || c.state === 'revealed') return;
+  el.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.88)' }],
+    { duration: 80, easing: 'ease-out', fill: 'forwards' });
+  _pressAnimated = true;
+}
+
+function animateCellRelease(idx) {
+  if (!_pressAnimated) return;
+  _pressAnimated = false;
+  const el = gridEl.children[idx];
+  if (!el) return;
+  el.getAnimations().forEach(a => a.cancel());
+  el.animate([{ transform: 'scale(0.88)' }, { transform: 'scale(1)' }],
+    { duration: 80, easing: 'ease-out' });
+}
 
 gridEl.addEventListener('pointerdown', e => {
   const el = e.target.closest('.cell');
   if (!el || gameOver) return;
   _tapIdx = +el.dataset.idx;
+  animateCellPress(_tapIdx);
   pressTimer = setTimeout(() => {
+    animateCellRelease(_tapIdx);
     pressTimer = null;
     _tapIdx = -1;
     const idx = +el.dataset.idx;
@@ -568,7 +576,8 @@ gridEl.addEventListener('pointerdown', e => {
 }, { passive: true });
 
 gridEl.addEventListener('pointerup', e => {
-  if (e.pointerType === 'mouse') return; // マウスはclickで処理
+  animateCellRelease(_tapIdx);
+  if (e.pointerType === 'mouse') { _tapIdx = -1; return; }
   if (pressTimer !== null && _tapIdx >= 0) {
     clearTimeout(pressTimer);
     pressTimer = null;
@@ -579,7 +588,12 @@ gridEl.addEventListener('pointerup', e => {
 }, { passive: true });
 
 gridEl.addEventListener('pointermove', () => {
-  if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; _tapIdx = -1; }
+  if (pressTimer) {
+    animateCellRelease(_tapIdx);
+    clearTimeout(pressTimer);
+    pressTimer = null;
+    _tapIdx = -1;
+  }
 }, { passive: true });
 
 // マウスクリック（touchはpointerupで処理済みのためスキップ）
@@ -669,8 +683,13 @@ function collectOre(idx) {
   c.state = 'revealed';
 
   const el = gridEl.children[idx];
+  if (el._pulse) { el._pulse.cancel(); el._pulse = null; }
   el.className = 'cell collected';
   el.textContent = oreEmoji(idx);
+  el.animate(
+    [{ transform: 'scale(1.3)', opacity: '1' }, { transform: 'scale(0.8)', opacity: '0' }],
+    { duration: 180, easing: 'ease-out', fill: 'forwards' }
+  );
 
   oresFound++;
   score += SCORE_ORE;
@@ -692,6 +711,10 @@ function hitBomb(idx) {
   const c = cells[idx];
   c.state = 'revealed';
   refreshCell(idx);
+  gridEl.children[idx].animate(
+    [{ transform: 'scale(1)' }, { transform: 'scale(1.4)' }, { transform: 'scale(1.1)' }, { transform: 'scale(1)' }],
+    { duration: 220, easing: 'ease-out' }
+  );
 
   // Unlock neighbors even on bomb hit (the hole is dug)
   unlockNeighbors(idx);
