@@ -497,10 +497,6 @@ function applyCell(el, i) {
     } else if (c.type === 'ore') {
       el.classList.add('ore');
       el.textContent = oreEmoji(i);
-      el._pulse = el.animate(
-        [{ transform: 'scale(1)' }, { transform: 'scale(1.06)' }, { transform: 'scale(1)' }],
-        { duration: 1200, easing: 'ease-in-out', iterations: Infinity }
-      );
     } else {
       el.classList.add('revealed');
       const total = c.adjOre + c.adjBomb;
@@ -540,23 +536,22 @@ function updateHUD() {
 let pressTimer = null;
 let _tapIdx = -1;
 let _touchHandled = false;
-let _pressAnimated = false;
+let _pressAnim = null;
 
 function animateCellPress(idx) {
   const el = gridEl.children[idx];
   const c = cells[idx];
   if (!el || !c || !c.reachable || c.state === 'revealed') return;
-  el.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.88)' }],
+  _pressAnim = el.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.88)' }],
     { duration: 80, easing: 'ease-out', fill: 'forwards' });
-  _pressAnimated = true;
 }
 
 function animateCellRelease(idx) {
-  if (!_pressAnimated) return;
-  _pressAnimated = false;
+  if (!_pressAnim) return;
+  _pressAnim.cancel(); // このアニメーションのみキャンセル（他に影響しない）
+  _pressAnim = null;
   const el = gridEl.children[idx];
   if (!el) return;
-  el.getAnimations().forEach(a => a.cancel());
   el.animate([{ transform: 'scale(0.88)' }, { transform: 'scale(1)' }],
     { duration: 80, easing: 'ease-out' });
 }
@@ -683,7 +678,6 @@ function collectOre(idx) {
   c.state = 'revealed';
 
   const el = gridEl.children[idx];
-  if (el._pulse) { el._pulse.cancel(); el._pulse = null; }
   el.className = 'cell collected';
   el.textContent = oreEmoji(idx);
   el.animate(
@@ -695,7 +689,10 @@ function collectOre(idx) {
   score += SCORE_ORE;
 
   setTimeout(() => {
-    applyCell(el, idx);
+    // fill:'forwards'のアニメーション状態を消してから見た目をリセット
+    el.getAnimations().forEach(a => a.cancel());
+    el.className = 'cell ore';
+    el.textContent = oreEmoji(idx);
   }, 180);
 
   // Unlock neighbors when ore is collected
