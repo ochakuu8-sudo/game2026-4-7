@@ -123,15 +123,9 @@
     border-left: 2px solid #c06828;
     border-bottom: 2px solid #4a2a10;
     border-right: 2px solid #4a2a10;
-    box-shadow: inset 1px 1px 0 #d08040, inset -1px -1px 0 #3a2010,
-                0 0 5px #c0601830;
+    box-shadow: inset 1px 1px 0 #d08040, inset -1px -1px 0 #3a2010;
     cursor: pointer;
     filter: none;
-    animation: dirt-ready 2.5s ease-in-out infinite;
-  }
-  @keyframes dirt-ready {
-    0%,100% { box-shadow: inset 1px 1px 0 #d08040, inset -1px -1px 0 #3a2010, 0 0 5px #c0601830; }
-    50%      { box-shadow: inset 1px 1px 0 #d08040, inset -1px -1px 0 #3a2010, 0 0 9px #c0701850; }
   }
   .cell.hidden.reachable:active { transform: scale(0.90); filter: brightness(0.75); }
   .cell.hidden.reachable::after {
@@ -155,17 +149,18 @@
   .cell.revealed.num-red    { color: #f54; text-shadow: 0 0 6px #f54a; }
   .cell.revealed.num-yellow { color: #ff0; text-shadow: 0 0 8px #ff08; }
 
-  /* Ore */
+  /* Ore — transform pulse is GPU-composited (no repaint) */
   .cell.ore {
     background: radial-gradient(circle at 40% 35%, #90ffe0, #00c880 40%, #007850);
     border: 2px solid #00ffaa;
-    box-shadow: 0 0 8px #00ffaa80, inset 0 0 4px #00ffaa40;
+    box-shadow: 0 0 8px #00ffaa80;
     font-size: 18px;
     animation: ore-pulse 2s ease-in-out infinite;
+    will-change: transform;
   }
   @keyframes ore-pulse {
-    0%,100% { box-shadow: 0 0 8px #00ffaa80, inset 0 0 4px #00ffaa40; }
-    50%      { box-shadow: 0 0 14px #00ffaacc, inset 0 0 6px #00ffaa60; }
+    0%,100% { transform: scale(1); }
+    50%      { transform: scale(1.06); }
   }
 
   /* Bomb hit */
@@ -874,18 +869,20 @@ const SFX = (() => {
   };
 })();
 
-// ─── Particle System (lean — fillRect only, no save/restore/rotate) ───────────
+// ─── Particle System ──────────────────────────────────────────────────────────
+// Float32Array pool: x,y,vx,vy,sz,life,maxLife,colorIdx  (STRIDE=8)
+// - No globalAlpha (fade expressed as shrinking size → 0 GC, 0 state changes)
+// - fillStyle only when colorIdx changes (same-event particles share palette)
+// - Dirty-rect clear: only erase pixels that were drawn last frame
 const fxCanvas = document.getElementById('fx-canvas');
 const fxCtx    = fxCanvas.getContext('2d');
-
-// Flat typed arrays for max performance: x,y,vx,vy,sz,r,g,b,life,maxLife
-// 10 floats per particle, pre-allocated pool
-const MAX_P  = 64;
-const STRIDE = 10;
-const pool   = new Float32Array(MAX_P * STRIDE);
-let   pCount = 0;
-let   fxRafId = null;
-let   fxLastT = null;
+const MAX_P    = 48;
+const STRIDE   = 8;
+const pool     = new Float32Array(MAX_P * STRIDE);
+let   pCount   = 0;
+let   fxRafId  = null;
+let   fxLastT  = null;
+let   fxDirty  = null; // {x,y,w,h} of last drawn area → cleared next frame
 
 function fxResize() {
   fxCanvas.width  = window.innerWidth;
@@ -894,21 +891,26 @@ function fxResize() {
 window.addEventListener('resize', fxResize);
 fxResize();
 
-// colors: array of [r,g,b] arrays
-function spawnParticles(ox, oy, count, rgbs, size, speed, grav, life) {
+// Color palette — pre-built strings, indexed per particle (no string creation in hot loop)
+const PAL = [
+  '#8b4513','#6b3211','#a05a28','#c07030','#4a2008', // 0-4 dirt
+  '#00ffaa','#40ffcc','#00ee80','#aaffee','#ffff88',  // 5-9 ore
+  '#ff4400','#ff8800','#ffcc00','#ff2200','#ff6600',  // 10-14 bomb
+];
+
+function spawnParticles(ox, oy, count, palStart, palLen, size, speed, life) {
   for (let i = 0; i < count && pCount < MAX_P; i++, pCount++) {
-    const a   = (i / count) * Math.PI * 2 + (Math.random() - .5) * .8;
-    const spd = speed * (.55 + Math.random() * .7);
+    const a   = (i / count) * Math.PI * 2 + (Math.random() - .5);
+    const spd = speed * (.5 + Math.random() * .7);
     const o   = pCount * STRIDE;
-    const c   = rgbs[i % rgbs.length];
     pool[o]   = ox;
     pool[o+1] = oy;
     pool[o+2] = Math.cos(a) * spd;
     pool[o+3] = Math.sin(a) * spd - speed * .2;
     pool[o+4] = size * (.5 + Math.random() * .7);
-    pool[o+5] = c[0]; pool[o+6] = c[1]; pool[o+7] = c[2];
-    pool[o+8] = life;
-    pool[o+9] = life;
+    pool[o+5] = life;
+    pool[o+6] = life;
+    pool[o+7] = palStart + (i % palLen);
   }
   if (!fxRafId) { fxLastT = null; fxRafId = requestAnimationFrame(fxTick); }
 }
@@ -916,37 +918,51 @@ function spawnParticles(ox, oy, count, rgbs, size, speed, grav, life) {
 function fxTick(ts) {
   const dt = fxLastT ? Math.min((ts - fxLastT) / 1000, .05) : .016;
   fxLastT = ts;
-  fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+
+  // Clear only previously drawn dirty rect (not full screen)
+  if (fxDirty) {
+    fxCtx.clearRect(fxDirty.x, fxDirty.y, fxDirty.w, fxDirty.h);
+    fxDirty = null;
+  }
 
   let alive = 0;
+  let x1 = 9999, y1 = 9999, x2 = -9999, y2 = -9999;
+  let lastCI = -1;
+
   for (let i = 0; i < pCount; i++) {
     const o = i * STRIDE;
-    const life = pool[o+8] - dt;
-    if (life <= 0) { pool[o+8] = 0; continue; }
-    pool[o+8] = life;
+    const life = pool[o+5] - dt;
+    if (life <= 0) { pool[o+5] = 0; continue; }
+    pool[o+5] = life;
     alive++;
 
-    pool[o+3] += 380 * dt;   // gravity
-    pool[o+2] *= .92;         // friction
+    pool[o+3] += 380 * dt;  // gravity
+    pool[o+2] *= .92;        // air friction
     pool[o]   += pool[o+2] * dt;
     pool[o+1] += pool[o+3] * dt;
 
-    const t = life / pool[o+9];
-    const s = pool[o+4] * t;
-    // set color once per particle, alpha via globalAlpha
-    fxCtx.globalAlpha = t;
-    fxCtx.fillStyle = `rgb(${pool[o+5]|0},${pool[o+6]|0},${pool[o+7]|0})`;
-    fxCtx.fillRect(pool[o] - s * .5, pool[o+1] - s * .5, s, s);
+    const t  = life / pool[o+6];
+    const s  = Math.max(1, (pool[o+4] * t) | 0); // size fades to zero (no globalAlpha needed)
+    const px = (pool[o]   - s * .5) | 0;
+    const py = (pool[o+1] - s * .5) | 0;
+    const ci = pool[o+7] | 0;
+
+    if (ci !== lastCI) { fxCtx.fillStyle = PAL[ci]; lastCI = ci; } // state change only on color switch
+    fxCtx.fillRect(px, py, s, s);
+
+    // Accumulate dirty bounds
+    if (px     < x1) x1 = px;
+    if (py     < y1) y1 = py;
+    if (px + s > x2) x2 = px + s;
+    if (py + s > y2) y2 = py + s;
   }
 
-  fxCtx.globalAlpha = 1;
-
   if (alive > 0) {
+    fxDirty = { x: x1 - 1, y: y1 - 1, w: x2 - x1 + 2, h: y2 - y1 + 2 };
     fxRafId = requestAnimationFrame(fxTick);
   } else {
-    pCount  = 0;
-    fxRafId = null;
-    fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+    if (x1 < 9999) fxCtx.clearRect(x1-1, y1-1, x2-x1+2, y2-y1+2);
+    pCount = 0; fxRafId = null; fxLastT = null;
   }
 }
 
@@ -975,22 +991,17 @@ function screenFlash(color) {
   sf.classList.add('screen-flash-on');
 }
 
-// Pre-parsed RGB color arrays (avoid string parsing in hot path)
-const C_DIRT = [[139,69,19],[107,50,17],[160,90,40],[192,112,48],[74,32,8]];
-const C_ORE  = [[0,255,170],[64,255,204],[0,238,128],[170,255,238],[255,255,128]];
-const C_BOMB = [[255,68,0],[255,136,0],[255,204,0],[255,34,0],[255,170,0]];
-
 function fxDig(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-dig');
-  spawnParticles(x, y, 5, C_DIRT, 7, 140, 380, .28);
+  spawnParticles(x, y, 5, 0, 5, 7, 140, .28);  // palStart=0 (dirt)
   SFX.dig();
 }
 
 function fxOre(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-ore');
-  spawnParticles(x, y, 7, C_ORE, 7, 170, 160, .42);
+  spawnParticles(x, y, 7, 5, 5, 7, 170, .42);  // palStart=5 (ore)
   SFX.ore();
 }
 
@@ -998,7 +1009,7 @@ function fxBomb(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-bomb');
   screenFlash('#ff2200');
-  spawnParticles(x, y, 10, C_BOMB, 9, 210, 280, .45);
+  spawnParticles(x, y, 10, 10, 5, 9, 210, .45); // palStart=10 (bomb)
   SFX.bomb();
 }
 
