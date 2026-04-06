@@ -393,10 +393,10 @@ function initGame() {
   btnFlag.classList.remove('active');
   overlayEl.classList.remove('show');
 
-  cells = Array.from({ length: COLS * ROWS }, (_, i) => ({
+  cells = Array.from({ length: COLS * ROWS }, () => ({
     type:      'empty',   // 'empty' | 'ore' | 'bomb'
     state:     'hidden',  // 'hidden' | 'revealed' | 'flagged'
-    reachable: Math.floor(i / COLS) < SAFE_ROWS_TOP + 1, // top rows reachable
+    reachable: false,
     adjOre:    0,
     adjBomb:   0,
   }));
@@ -404,6 +404,15 @@ function initGame() {
   placeBombs();
   placeOres();
   calcAdjacency();
+
+  // Reveal top row from the start, then unlock row 1 as reachable
+  for (let c = 0; c < COLS; c++) {
+    cells[c].state = 'revealed';
+    neighbors(c).forEach(ni => {
+      if (cells[ni].state === 'hidden') cells[ni].reachable = true;
+    });
+  }
+
   renderGrid();
   updateHUD();
 }
