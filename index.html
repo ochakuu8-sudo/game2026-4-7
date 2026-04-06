@@ -101,24 +101,45 @@
     transition: transform 0.08s;
   }
 
-  /* Covered / Dirt */
+  /* Covered / Dirt — not yet reachable (dark, uninteractable) */
   .cell.hidden {
     background:
-      radial-gradient(circle at 30% 30%, #a0531a 0%, transparent 50%),
-      linear-gradient(135deg, #7a3e18, #6b3211, #5a2a0c, #7a3a14);
-    border-top: 2px solid #c06828;
-    border-left: 2px solid #b05e22;
-    border-bottom: 2px solid #3a1a06;
-    border-right: 2px solid #3a1a06;
-    box-shadow: inset 1px 1px 0 #c07030, inset -1px -1px 0 #2a1004;
+      linear-gradient(135deg, #3a1c08, #311508, #281005, #341608);
+    border-top: 2px solid #5a2e10;
+    border-left: 2px solid #4e2808;
+    border-bottom: 2px solid #1e0c02;
+    border-right: 2px solid #1e0c02;
+    box-shadow: inset 1px 1px 0 #5a3018, inset -1px -1px 0 #140802;
+    cursor: default;
+    filter: brightness(0.8);
   }
-  .cell.hidden:active { transform: scale(0.92); filter: brightness(0.8); }
-  .cell.hidden::after {
+
+  /* Reachable dirt — can be dug now */
+  .cell.hidden.reachable {
+    background:
+      radial-gradient(circle at 30% 30%, #b0631a 0%, transparent 50%),
+      linear-gradient(135deg, #8a4e28, #7b4221, #6a3a1c, #8a4a24);
+    border-top: 2px solid #d07830;
+    border-left: 2px solid #c06828;
+    border-bottom: 2px solid #4a2a10;
+    border-right: 2px solid #4a2a10;
+    box-shadow: inset 1px 1px 0 #d08040, inset -1px -1px 0 #3a2010,
+                0 0 5px #c0601830;
+    cursor: pointer;
+    filter: none;
+    animation: dirt-ready 2.5s ease-in-out infinite;
+  }
+  @keyframes dirt-ready {
+    0%,100% { box-shadow: inset 1px 1px 0 #d08040, inset -1px -1px 0 #3a2010, 0 0 5px #c0601830; }
+    50%      { box-shadow: inset 1px 1px 0 #d08040, inset -1px -1px 0 #3a2010, 0 0 9px #c0701850; }
+  }
+  .cell.hidden.reachable:active { transform: scale(0.90); filter: brightness(0.75); }
+  .cell.hidden.reachable::after {
     content: '';
     position: absolute;
     inset: 2px;
     background:
-      radial-gradient(circle at 20% 20%, rgba(255,180,80,0.12) 0%, transparent 40%),
+      radial-gradient(circle at 20% 20%, rgba(255,180,80,0.14) 0%, transparent 40%),
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect x='0' y='0' width='4' height='4' fill='rgba(0,0,0,0.08)'/%3E%3Crect x='4' y='4' width='4' height='4' fill='rgba(0,0,0,0.08)'/%3E%3C/svg%3E");
     border-radius: 3px;
     pointer-events: none;
@@ -178,6 +199,7 @@
     border-bottom: 2px solid #3a1a06;
     border-right: 2px solid #3a1a06;
     font-size: 16px;
+    cursor: pointer;
   }
 
   /* Ore collected (flash) */
@@ -328,22 +350,22 @@
 
 <script>
 // ─── Config ───────────────────────────────────────────────────────────────────
-const COLS       = 10;
-const ROWS       = 14;
-const ORE_COUNT  = 12;
-const BOMB_COUNT = 14;
-const MAX_LIVES  = 3;
-const SCORE_ORE  = 100;
-const SCORE_CELL = 5;
+const COLS          = 10;
+const ROWS          = 14;
+const ORE_COUNT     = 12;
+const BOMB_COUNT    = 14;
+const MAX_LIVES     = 3;
+const SCORE_ORE     = 100;
+const SCORE_CELL    = 5;
+const SAFE_ROWS_TOP = 1; // rows from top with no bombs
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let cells       = [];   // {type, state, adjOre, adjBomb}
+let cells       = [];   // {type, state, reachable, adjOre, adjBomb}
 let lives       = MAX_LIVES;
 let score       = 0;
 let oresFound   = 0;
 let oresTotal   = ORE_COUNT;
 let flagMode    = false;
-let firstTap    = true;
 let gameOver    = false;
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
@@ -366,81 +388,50 @@ function initGame() {
   score     = 0;
   oresFound = 0;
   flagMode  = false;
-  firstTap  = true;
   gameOver  = false;
 
   btnFlag.classList.remove('active');
   overlayEl.classList.remove('show');
 
-  cells = Array.from({ length: COLS * ROWS }, () => ({
-    type: 'empty',   // 'empty' | 'ore' | 'bomb'
-    state: 'hidden', // 'hidden' | 'revealed' | 'flagged'
-    adjOre: 0,
-    adjBomb: 0,
+  cells = Array.from({ length: COLS * ROWS }, (_, i) => ({
+    type:      'empty',   // 'empty' | 'ore' | 'bomb'
+    state:     'hidden',  // 'hidden' | 'revealed' | 'flagged'
+    reachable: Math.floor(i / COLS) < SAFE_ROWS_TOP + 1, // top rows reachable
+    adjOre:    0,
+    adjBomb:   0,
   }));
 
-  placeMines([], BOMB_COUNT, COLS * ROWS);
-  placeOres(BOMB_COUNT);
+  placeBombs();
+  placeOres();
   calcAdjacency();
   renderGrid();
   updateHUD();
 }
 
-function placeMines(exclude, count, total) {
+function placeBombs() {
+  // Bombs never in top SAFE_ROWS_TOP rows
+  const safeUntil = SAFE_ROWS_TOP * COLS;
   let placed = 0;
-  while (placed < count) {
-    const idx = Math.floor(Math.random() * total);
-    if (!exclude.includes(idx) && cells[idx].type === 'empty') {
+  while (placed < BOMB_COUNT) {
+    const idx = safeUntil + Math.floor(Math.random() * (COLS * ROWS - safeUntil));
+    if (cells[idx].type === 'empty') {
       cells[idx].type = 'bomb';
       placed++;
     }
   }
 }
 
-function placeOres(existingBombs) {
+function placeOres() {
+  // Ores start from row 1 onwards (not surface row 0)
+  const startIdx = COLS;
   let placed = 0;
   while (placed < ORE_COUNT) {
-    const idx = Math.floor(Math.random() * COLS * ROWS);
+    const idx = startIdx + Math.floor(Math.random() * (COLS * ROWS - startIdx));
     if (cells[idx].type === 'empty') {
       cells[idx].type = 'ore';
       placed++;
     }
   }
-}
-
-function ensureSafeFirst(idx) {
-  // If first tap hits bomb or ore, move it away
-  if (cells[idx].type === 'bomb' || cells[idx].type === 'ore') {
-    const orig = cells[idx].type;
-    cells[idx].type = 'empty';
-    let placed = false;
-    // Find a new spot
-    for (let i = 0; i < COLS * ROWS && !placed; i++) {
-      const ri = Math.floor(Math.random() * COLS * ROWS);
-      if (ri !== idx && cells[ri].type === 'empty') {
-        cells[ri].type = orig;
-        placed = true;
-      }
-    }
-    calcAdjacency();
-  }
-  // Also ensure neighbors of first tap are safe from bombs (Minesweeper courtesy)
-  const nbrs = neighbors(idx);
-  nbrs.forEach(ni => {
-    if (cells[ni].type === 'bomb') {
-      cells[ni].type = 'empty';
-      // Relocate bomb
-      let placed = false;
-      for (let t = 0; t < COLS * ROWS * 2 && !placed; t++) {
-        const ri = Math.floor(Math.random() * COLS * ROWS);
-        if (ri !== idx && !nbrs.includes(ri) && cells[ri].type === 'empty') {
-          cells[ri].type = 'bomb';
-          placed = true;
-        }
-      }
-    }
-  });
-  calcAdjacency();
 }
 
 function calcAdjacency() {
@@ -489,6 +480,7 @@ function applyCell(el, i) {
 
   if (c.state === 'hidden') {
     el.classList.add('hidden');
+    if (c.reachable) el.classList.add('reachable');
   } else if (c.state === 'flagged') {
     el.classList.add('flagged');
     el.textContent = '🚩';
@@ -550,7 +542,7 @@ gridEl.addEventListener('touchstart', e => {
   const idx = +el.dataset.idx;
   pressTimer = setTimeout(() => {
     pressTimer = null;
-    if (cells[idx].state !== 'revealed') toggleFlag(idx);
+    if (cells[idx].state !== 'revealed' && cells[idx].reachable) toggleFlag(idx);
   }, 450);
 }, { passive: true });
 
@@ -574,18 +566,14 @@ function handleTap(idx) {
   const c = cells[idx];
   if (c.state === 'revealed') return;
 
+  // Only reachable cells can be interacted with
+  if (!c.reachable) return;
+
   if (flagMode) {
     toggleFlag(idx);
     return;
   }
   if (c.state === 'flagged') return; // must unflag first (or long-press)
-
-  if (firstTap) {
-    firstTap = false;
-    ensureSafeFirst(idx);
-    // re-render after possible relocations
-    renderGrid();
-  }
 
   reveal(idx);
 }
@@ -615,21 +603,26 @@ function reveal(idx) {
     return;
   }
 
-  // Empty cell
+  // Empty cell — dig it and unlock neighbors
   c.state = 'revealed';
   score += SCORE_CELL;
   refreshCell(idx);
   floatText(idx, `+${SCORE_CELL}`, '#8888ff');
 
-  if (c.adjOre === 0 && c.adjBomb === 0) {
-    // Flood fill
-    neighbors(idx).forEach(ni => {
-      if (cells[ni].state === 'hidden') reveal(ni);
-    });
-  }
+  // Make all hidden neighbors reachable (no flood fill — player must tap each)
+  unlockNeighbors(idx);
 
   updateHUD();
   checkWin();
+}
+
+function unlockNeighbors(idx) {
+  neighbors(idx).forEach(ni => {
+    if (cells[ni].state !== 'revealed' && !cells[ni].reachable) {
+      cells[ni].reachable = true;
+      refreshCell(ni);
+    }
+  });
 }
 
 function collectOre(idx) {
@@ -647,6 +640,9 @@ function collectOre(idx) {
     applyCell(el, idx);
   }, 320);
 
+  // Unlock neighbors when ore is collected
+  unlockNeighbors(idx);
+
   floatText(idx, `+${SCORE_ORE}`, '#00ffaa');
   updateHUD();
   checkWin();
@@ -656,6 +652,9 @@ function hitBomb(idx) {
   const c = cells[idx];
   c.state = 'revealed';
   refreshCell(idx);
+
+  // Unlock neighbors even on bomb hit (the hole is dug)
+  unlockNeighbors(idx);
 
   lives--;
   updateHUD();
