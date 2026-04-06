@@ -300,6 +300,50 @@
     0%   { transform: translateY(0); opacity: 1; }
     100% { transform: translateY(-40px); opacity: 0; }
   }
+
+  /* ── Cell flash effects ── */
+  @keyframes flash-dig {
+    0%   { filter: brightness(4) saturate(0); transform: scale(1.15); }
+    60%  { transform: scale(0.92); }
+    100% { filter: none; transform: scale(1); }
+  }
+  @keyframes flash-ore {
+    0%   { filter: brightness(6) hue-rotate(80deg) saturate(5); transform: scale(1.3); }
+    60%  { transform: scale(1.05); }
+    100% { filter: none; transform: scale(1); }
+  }
+  @keyframes flash-bomb {
+    0%   { filter: brightness(8) saturate(0); transform: scale(1.4); }
+    30%  { filter: brightness(3) saturate(3) hue-rotate(340deg); transform: scale(1.1); }
+    100% { filter: none; transform: scale(1); }
+  }
+  .flash-dig  { animation: flash-dig  .22s ease-out forwards !important; }
+  .flash-ore  { animation: flash-ore  .3s  ease-out forwards !important; }
+  .flash-bomb { animation: flash-bomb .35s ease-out forwards !important; }
+
+  /* ── FX canvas (particle overlay) ── */
+  #fx-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 50;
+  }
+
+  /* ── Screen flash (bomb hit) ── */
+  #screen-flash {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 48;
+    opacity: 0;
+  }
+  @keyframes screen-flash {
+    0%   { opacity: 0.55; }
+    100% { opacity: 0; }
+  }
+  .screen-flash-on { animation: screen-flash .35s ease-out forwards; }
 </style>
 </head>
 <body>
@@ -591,8 +635,10 @@ function toggleFlag(idx) {
   const c = cells[idx];
   if (c.state === 'hidden') {
     c.state = 'flagged';
+    SFX.flag();
   } else if (c.state === 'flagged') {
     c.state = 'hidden';
+    SFX.flag();
   }
   refreshCell(idx);
 }
@@ -616,6 +662,7 @@ function reveal(idx) {
   c.state = 'revealed';
   score += SCORE_CELL;
   refreshCell(idx);
+  fxDig(idx);
   floatText(idx, `+${SCORE_CELL}`, '#8888ff');
 
   // Make all hidden neighbors reachable (no flood fill — player must tap each)
@@ -652,6 +699,7 @@ function collectOre(idx) {
   // Unlock neighbors when ore is collected
   unlockNeighbors(idx);
 
+  fxOre(idx);
   floatText(idx, `+${SCORE_ORE}`, '#00ffaa');
   updateHUD();
   checkWin();
@@ -665,12 +713,13 @@ function hitBomb(idx) {
   // Unlock neighbors even on bomb hit (the hole is dug)
   unlockNeighbors(idx);
 
+  fxBomb(idx);
   lives--;
   updateHUD();
   shakeGrid();
 
   if (lives <= 0) {
-    setTimeout(() => endGame(false), 600);
+    setTimeout(() => endGame(false), 700);
   } else {
     floatText(idx, `💥 -1`, '#ff4400');
   }
@@ -708,6 +757,8 @@ function endGame(won) {
     }
   }
 
+  if (won) SFX.win(); else SFX.lose();
+
   setTimeout(() => {
     oIcon.textContent       = won ? '🏆' : '💥';
     oTitle.textContent      = won ? 'クリア！' : 'ゲームオーバー';
@@ -717,7 +768,7 @@ function endGame(won) {
     oScoreVal.textContent   = score;
     oTitle.style.color      = won ? '#4fc' : '#f54';
     overlayEl.classList.add('show');
-  }, won ? 300 : 700);
+  }, won ? 400 : 900);
 }
 
 // ─── Float text ───────────────────────────────────────────────────────────────
@@ -739,6 +790,271 @@ function floatText(idx, text, color) {
   setTimeout(() => div.remove(), 800);
 }
 
+// ─── Audio (Web Audio API — procedural synthesis, no files needed) ───────────
+const SFX = (() => {
+  let ctx = null;
+  const resume = () => {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  };
+  const tone = (freq, freq2, type, dur, vol, delay = 0, detune = 0) => {
+    try {
+      const c = resume(), t = c.currentTime + delay;
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(freq, t);
+      if (freq2 !== freq) o.frequency.exponentialRampToValueAtTime(Math.max(freq2, 8), t + dur);
+      if (detune) o.detune.setValueAtTime(detune, t);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(c.destination);
+      o.start(t); o.stop(t + dur + 0.02);
+    } catch (_) {}
+  };
+  const noise = (dur, vol, delay = 0, highpass = 0) => {
+    try {
+      const c = resume(), t = c.currentTime + delay;
+      const len = Math.ceil(c.sampleRate * dur);
+      const buf = c.createBuffer(1, len, c.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(), g = c.createGain();
+      src.buffer = buf;
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      if (highpass) {
+        const f = c.createBiquadFilter();
+        f.type = 'highpass'; f.frequency.value = highpass;
+        src.connect(f); f.connect(g);
+      } else {
+        src.connect(g);
+      }
+      g.connect(c.destination);
+      src.start(t); src.stop(t + dur);
+    } catch (_) {}
+  };
+  return {
+    // ドスッ + ザリっ : dirt crunch
+    dig: () => {
+      tone(220, 55, 'sawtooth', .09, .28);
+      noise(.07, .18, 0, 600);
+    },
+    // チャリン + キラン : ore sparkle chime
+    ore: () => {
+      tone(880, 1320, 'sine', .14, .3);
+      tone(1100, 1650, 'sine', .1, .2, .08);
+      tone(660, 660, 'triangle', .06, .15, .18);
+    },
+    // ドカン : explosion
+    bomb: () => {
+      noise(.4, .65);
+      tone(110, 28, 'sawtooth', .35, .45);
+      tone(60, 20, 'square', .3, .25, .04);
+    },
+    // ファンファーレ : win
+    win: () => {
+      [[523,.18],[659,.12],[784,.12],[784,.12],[1047,.3]].reduce((d,[f,l]) => {
+        tone(f, f, 'sine', l + .05, .25, d);
+        return d + l;
+      }, 0);
+    },
+    // ガーン : lose
+    lose: () => {
+      [[350,.15],[260,.15],[190,.15],[130,.25]].reduce((d,[f,l]) => {
+        tone(f, f * .85, 'sawtooth', l + .05, .22, d);
+        return d + l;
+      }, 0);
+    },
+    // カチッ : flag
+    flag: () => {
+      tone(600, 380, 'square', .06, .14);
+      noise(.04, .06, .01, 2000);
+    },
+  };
+})();
+
+// ─── Particle System ──────────────────────────────────────────────────────────
+const fxCanvas = document.getElementById('fx-canvas');
+const fxCtx    = fxCanvas.getContext('2d');
+let   particles = [];
+let   fxRafId   = null;
+let   fxLastT   = null;
+
+function fxResize() {
+  fxCanvas.width  = window.innerWidth;
+  fxCanvas.height = window.innerHeight;
+}
+window.addEventListener('resize', fxResize);
+fxResize();
+
+function spawnParticles(x, y, { count=8, colors=['#a05020'], size=6,
+    speed=130, gravity=320, life=0.4, shape='square' }) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const spd   = speed * (.45 + Math.random() * .9);
+    particles.push({
+      x, y,
+      vx:   Math.cos(angle) * spd,
+      vy:   Math.sin(angle) * spd - speed * .25,
+      sz:   size * (.4 + Math.random() * .9),
+      col:  colors[Math.floor(Math.random() * colors.length)],
+      life, maxLife: life,
+      gravity,
+      shape,
+      rot:  Math.random() * Math.PI * 2,
+      rotV: (Math.random() - .5) * 12,
+    });
+  }
+  fxStart();
+}
+
+function spawnRing(x, y, color, maxR = 58) {
+  particles.push({ type:'ring', x, y, r:6, maxR, col:color, life:.4, maxLife:.4 });
+  fxStart();
+}
+
+function fxStart() {
+  if (!fxRafId) { fxLastT = null; fxRafId = requestAnimationFrame(fxTick); }
+}
+
+function fxTick(ts) {
+  const dt = fxLastT ? Math.min((ts - fxLastT) / 1000, .05) : .016;
+  fxLastT = ts;
+  fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+
+  particles = particles.filter(p => p.life > 0);
+
+  for (const p of particles) {
+    p.life -= dt;
+    const t = p.life / p.maxLife; // 1→0
+
+    if (p.type === 'ring') {
+      p.r += (p.maxR - 6) * (dt / p.maxLife);
+      fxCtx.save();
+      fxCtx.globalAlpha = t * .65;
+      fxCtx.strokeStyle = p.col;
+      fxCtx.lineWidth   = 3 * t + 1;
+      fxCtx.beginPath();
+      fxCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      fxCtx.stroke();
+      fxCtx.restore();
+      continue;
+    }
+
+    p.vx *= .93;
+    p.vy += p.gravity * dt;
+    p.x  += p.vx * dt;
+    p.y  += p.vy * dt;
+    p.rot += p.rotV * dt;
+
+    const s = p.sz * (.2 + t * .8);
+    fxCtx.save();
+    fxCtx.globalAlpha = Math.min(1, t * 1.4);
+    fxCtx.fillStyle   = p.col;
+    fxCtx.translate(p.x, p.y);
+    fxCtx.rotate(p.rot);
+
+    if (p.shape === 'circle') {
+      fxCtx.beginPath();
+      fxCtx.arc(0, 0, s / 2, 0, Math.PI * 2);
+      fxCtx.fill();
+    } else if (p.shape === 'star') {
+      fxCtx.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const r = i % 2 === 0 ? s / 2 : s / 4.5;
+        const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
+        i === 0 ? fxCtx.moveTo(Math.cos(a)*r, Math.sin(a)*r)
+                : fxCtx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+      }
+      fxCtx.closePath();
+      fxCtx.fill();
+    } else { // square (default)
+      fxCtx.fillRect(-s / 2, -s / 2, s, s);
+    }
+    fxCtx.restore();
+  }
+
+  if (particles.length > 0) {
+    fxRafId = requestAnimationFrame(fxTick);
+  } else {
+    fxRafId = null;
+    fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+  }
+}
+
+// ─── Per-event FX ─────────────────────────────────────────────────────────────
+function cellCenter(idx) {
+  const el = gridEl.children[idx];
+  if (!el) return { x: window.innerWidth/2, y: window.innerHeight/2 };
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+function flashCell(idx, cls) {
+  const el = gridEl.children[idx];
+  if (!el) return;
+  ['flash-dig','flash-ore','flash-bomb'].forEach(c => el.classList.remove(c));
+  void el.offsetWidth; // reflow restart
+  el.classList.add(cls);
+  setTimeout(() => el.classList.remove(cls), 500);
+}
+
+function screenFlash(color) {
+  const sf = document.getElementById('screen-flash');
+  sf.style.background = color;
+  sf.classList.remove('screen-flash-on');
+  void sf.offsetWidth;
+  sf.classList.add('screen-flash-on');
+}
+
+function fxDig(idx) {
+  const { x, y } = cellCenter(idx);
+  flashCell(idx, 'flash-dig');
+  spawnParticles(x, y, {
+    count: 7,
+    colors: ['#8b4513','#6b3211','#a05a28','#c07030','#4a2008','#7a3a10'],
+    size: 7, speed: 150, gravity: 360, life: .32, shape: 'square',
+  });
+  SFX.dig();
+}
+
+function fxOre(idx) {
+  const { x, y } = cellCenter(idx);
+  flashCell(idx, 'flash-ore');
+  spawnParticles(x, y, {
+    count: 11,
+    colors: ['#00ffaa','#40ffcc','#00ee80','#aaffee','#80ffdd','#ffffff'],
+    size: 7, speed: 190, gravity: 140, life: .55, shape: 'star',
+  });
+  spawnParticles(x, y, {
+    count: 6,
+    colors: ['#ffff80','#ffffcc','#ffffff'],
+    size: 4, speed: 230, gravity: 100, life: .38, shape: 'circle',
+  });
+  spawnRing(x, y, '#00ffaa', 50);
+  SFX.ore();
+}
+
+function fxBomb(idx) {
+  const { x, y } = cellCenter(idx);
+  flashCell(idx, 'flash-bomb');
+  screenFlash('#ff2200');
+  spawnParticles(x, y, {
+    count: 14,
+    colors: ['#ff4400','#ff8800','#ffcc00','#ff2200','#ff6600','#ffaa00'],
+    size: 10, speed: 240, gravity: 260, life: .52, shape: 'square',
+  });
+  spawnParticles(x, y, {
+    count: 8,
+    colors: ['#ff6600','#ffcc44','#ffffff'],
+    size: 5, speed: 160, gravity: 180, life: .4, shape: 'circle',
+  });
+  spawnRing(x, y, '#ff8800', 70);
+  spawnRing(x, y, '#ff440044', 90);
+  SFX.bomb();
+}
+
 // ─── Responsive cell size ─────────────────────────────────────────────────────
 function adjustCellSize() {
   const avW = Math.min(window.innerWidth, 420) - 24;  // padding
@@ -758,5 +1074,7 @@ window.addEventListener('resize', () => { adjustCellSize(); });
 adjustCellSize();
 initGame();
 </script>
+<canvas id="fx-canvas"></canvas>
+<div id="screen-flash"></div>
 </body>
 </html>
