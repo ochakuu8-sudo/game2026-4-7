@@ -297,22 +297,16 @@
     100% { transform: translateY(-28px); opacity: 0; }
   }
 
-  /* ── Cell flash effects (opacity overlay — no CSS filter, GPU friendly) ── */
+  /* ── Cell flash effects ── */
   .cell::before {
     content: '';
     position: absolute;
     inset: 0;
     border-radius: inherit;
+    background: var(--flash-color, transparent);
     opacity: 0;
     pointer-events: none;
   }
-  @keyframes fl {
-    0%   { opacity: .85; }
-    100% { opacity: 0; }
-  }
-  .flash-dig::before  { background: #fff;    animation: fl .12s ease-out forwards; }
-  .flash-ore::before  { background: #00ffcc; animation: fl .14s ease-out forwards; }
-  .flash-bomb::before { background: #ff6600; animation: fl .16s ease-out forwards; }
 
   /* ── FX canvas (particle overlay) ── */
   #fx-canvas {
@@ -332,11 +326,6 @@
     z-index: 48;
     opacity: 0;
   }
-  @keyframes screen-flash {
-    0%   { opacity: 0.55; }
-    100% { opacity: 0; }
-  }
-  .screen-flash-on { animation: screen-flash .2s ease-out forwards; }
 </style>
 </head>
 <body>
@@ -768,12 +757,16 @@ function endGame(won) {
 }
 
 // ─── Float text ───────────────────────────────────────────────────────────────
+let _wrapRect = null;
+window.addEventListener('resize', () => { _wrapRect = null; });
+
 function floatText(idx, text, color) {
   const el = gridEl.children[idx];
   if (!el) return;
   const rect = el.getBoundingClientRect();
   const wrap = document.getElementById('grid-wrap');
-  const wRect = wrap.getBoundingClientRect();
+  if (!_wrapRect) _wrapRect = wrap.getBoundingClientRect();
+  const wRect = _wrapRect;
 
   const div = document.createElement('div');
   div.className = 'dig-anim';
@@ -978,18 +971,16 @@ function cellCenter(idx) {
 function flashCell(idx, cls) {
   const el = gridEl.children[idx];
   if (!el) return;
-  el.classList.remove('flash-dig', 'flash-ore', 'flash-bomb');
-  void el.offsetWidth;
-  el.classList.add(cls);
-  setTimeout(() => el.classList.remove(cls), 200);
+  const color = cls === 'flash-dig' ? '#fff' : cls === 'flash-ore' ? '#00ffcc' : '#ff6600';
+  const dur   = cls === 'flash-dig' ? 120    : cls === 'flash-ore' ? 140       : 160;
+  el.style.setProperty('--flash-color', color);
+  el.animate([{ opacity: 0.85 }, { opacity: 0 }], { duration: dur, easing: 'ease-out', pseudoElement: '::before' });
 }
 
 function screenFlash(color) {
   const sf = document.getElementById('screen-flash');
   sf.style.background = color;
-  sf.classList.remove('screen-flash-on');
-  void sf.offsetWidth;
-  sf.classList.add('screen-flash-on');
+  sf.animate([{ opacity: 0.55 }, { opacity: 0 }], { duration: 200, easing: 'ease-out' });
 }
 
 function fxDig(idx) {
