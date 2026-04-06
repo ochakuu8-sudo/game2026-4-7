@@ -565,32 +565,45 @@ function updateHUD() {
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
-gridEl.addEventListener('click', e => {
-  const el = e.target.closest('.cell');
-  if (!el || gameOver) return;
-  const idx = +el.dataset.idx;
-  handleTap(idx);
-});
-
-// Long press = flag (without flag mode button)
+// ─── Input ────────────────────────────────────────────────────────────────────
 let pressTimer = null;
-gridEl.addEventListener('touchstart', e => {
+let _tapIdx = -1;
+let _touchHandled = false;
+
+gridEl.addEventListener('pointerdown', e => {
   const el = e.target.closest('.cell');
   if (!el || gameOver) return;
-  const idx = +el.dataset.idx;
+  _tapIdx = +el.dataset.idx;
   pressTimer = setTimeout(() => {
     pressTimer = null;
+    _tapIdx = -1;
+    const idx = +el.dataset.idx;
     if (cells[idx].state !== 'revealed' && cells[idx].reachable) toggleFlag(idx);
   }, 450);
 }, { passive: true });
 
-gridEl.addEventListener('touchend', () => {
-  clearTimeout(pressTimer);
+gridEl.addEventListener('pointerup', e => {
+  if (e.pointerType === 'mouse') return; // マウスはclickで処理
+  if (pressTimer !== null && _tapIdx >= 0) {
+    clearTimeout(pressTimer);
+    pressTimer = null;
+    _touchHandled = true;
+    handleTap(_tapIdx);
+  }
+  _tapIdx = -1;
 }, { passive: true });
 
-gridEl.addEventListener('touchmove', () => {
-  clearTimeout(pressTimer);
+gridEl.addEventListener('pointermove', () => {
+  if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; _tapIdx = -1; }
 }, { passive: true });
+
+// マウスクリック（touchはpointerupで処理済みのためスキップ）
+gridEl.addEventListener('click', e => {
+  if (_touchHandled) { _touchHandled = false; return; }
+  const el = e.target.closest('.cell');
+  if (!el || gameOver) return;
+  handleTap(+el.dataset.idx);
+});
 
 btnFlag.addEventListener('click', () => {
   flagMode = !flagMode;
