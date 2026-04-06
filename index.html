@@ -156,7 +156,6 @@
     box-shadow: 0 0 8px #00ffaa80;
     font-size: 18px;
     animation: ore-pulse 1.2s ease-in-out infinite;
-    will-change: transform;
   }
   @keyframes ore-pulse {
     0%,100% { transform: scale(1); }
@@ -281,21 +280,6 @@
   }
   #btn-retry:active { transform: scale(0.95); }
 
-  /* ── Dig animation overlay ── */
-  .dig-anim {
-    position: absolute;
-    pointer-events: none;
-    font-size: 14px;
-    font-weight: bold;
-    opacity: 1;
-    animation: float-up 0.4s ease-out forwards;
-    z-index: 10;
-    white-space: nowrap;
-  }
-  @keyframes float-up {
-    0%   { transform: translateY(0); opacity: 1; }
-    100% { transform: translateY(-28px); opacity: 0; }
-  }
 
   /* ── Cell flash effects ── */
   .cell::before {
@@ -316,6 +300,7 @@
     height: 100%;
     pointer-events: none;
     z-index: 50;
+    will-change: transform;
   }
 
   /* ── Screen flash (bomb hit) ── */
@@ -781,21 +766,18 @@ function getCM() {
   return (_cm = { cs, gl: gr.left, gt: gr.top, wl: wr.left, wt: wr.top });
 }
 
-// ─── Float text ───────────────────────────────────────────────────────────────
-function floatText(idx, text, color) {
-  const { cs, gl, gt, wl, wt } = getCM();
-  const col = idx % COLS, row = Math.floor(idx / COLS);
-  const wrap = document.getElementById('grid-wrap');
+// ─── Float text (canvas-based, no DOM element creation) ──────────────────────
+const textFloats = [];
 
-  const div = document.createElement('div');
-  div.className = 'dig-anim';
-  div.textContent = text;
-  div.style.color = color;
-  div.style.left = (gl - wl + 7 + col * (cs + 2) + cs / 2 - 20) + 'px';
-  div.style.top  = (gt - wt + 7 + row * (cs + 2)) + 'px';
-  wrap.style.position = 'relative';
-  wrap.appendChild(div);
-  setTimeout(() => div.remove(), 450);
+function floatText(idx, text, color) {
+  const { cs, gl, gt } = getCM();
+  const col = idx % COLS, row = Math.floor(idx / COLS);
+  textFloats.push({
+    x: (gl + 7 + col * (cs + 2) + cs / 2) | 0,
+    y: (gt + 7 + row * (cs + 2)) | 0,
+    text, color, life: 0.4, maxLife: 0.4,
+  });
+  if (!fxRafId) { fxLastT = null; fxRafId = requestAnimationFrame(fxTick); }
 }
 
 // ─── Audio (Web Audio API — procedural synthesis, no files needed) ───────────
@@ -960,14 +942,34 @@ function fxTick(ts) {
     const py = (pool[o+1] - s * .5) | 0;
     const ci = pool[o+7] | 0;
 
-    if (ci !== lastCI) { fxCtx.fillStyle = PAL[ci]; lastCI = ci; } // state change only on color switch
+    if (ci !== lastCI) { fxCtx.fillStyle = PAL[ci]; lastCI = ci; }
     fxCtx.fillRect(px, py, s, s);
 
-    // Accumulate dirty bounds
     if (px     < x1) x1 = px;
     if (py     < y1) y1 = py;
     if (px + s > x2) x2 = px + s;
     if (py + s > y2) y2 = py + s;
+  }
+
+  // ── Text floats ──
+  if (textFloats.length > 0) {
+    fxCtx.font = 'bold 14px "Arial Black",Arial,sans-serif';
+    for (let i = textFloats.length - 1; i >= 0; i--) {
+      const f = textFloats[i];
+      f.life -= dt;
+      if (f.life <= 0) { textFloats.splice(i, 1); continue; }
+      alive++;
+      const t = f.life / f.maxLife;
+      const fy = (f.y - (1 - t) * 28) | 0;
+      fxCtx.globalAlpha = t;
+      fxCtx.fillStyle = f.color;
+      fxCtx.fillText(f.text, f.x - 20, fy);
+      if (f.x - 20 < x1) x1 = f.x - 20;
+      if (fy - 16  < y1) y1 = fy - 16;
+      if (f.x + 60 > x2) x2 = f.x + 60;
+      if (fy + 4   > y2) y2 = fy + 4;
+    }
+    fxCtx.globalAlpha = 1;
   }
 
   if (alive > 0) {
