@@ -756,24 +756,30 @@ function endGame(won) {
   }, won ? 250 : 500);
 }
 
-// ─── Float text ───────────────────────────────────────────────────────────────
-let _wrapRect = null;
-window.addEventListener('resize', () => { _wrapRect = null; });
+// ─── Cell position cache (避免 getBoundingClientRect on every dig) ──────────
+// Grid CSS: border 3px, padding 4px, gap 2px → offset=7, stride=cellSize+2
+let _cm = null;
+window.addEventListener('resize', () => { _cm = null; });
+function getCM() {
+  if (_cm) return _cm;
+  const cs = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell-size')) || 36;
+  const gr = gridEl.getBoundingClientRect();
+  const wr = document.getElementById('grid-wrap').getBoundingClientRect();
+  return (_cm = { cs, gl: gr.left, gt: gr.top, wl: wr.left, wt: wr.top });
+}
 
+// ─── Float text ───────────────────────────────────────────────────────────────
 function floatText(idx, text, color) {
-  const el = gridEl.children[idx];
-  if (!el) return;
-  const rect = el.getBoundingClientRect();
+  const { cs, gl, gt, wl, wt } = getCM();
+  const col = idx % COLS, row = Math.floor(idx / COLS);
   const wrap = document.getElementById('grid-wrap');
-  if (!_wrapRect) _wrapRect = wrap.getBoundingClientRect();
-  const wRect = _wrapRect;
 
   const div = document.createElement('div');
   div.className = 'dig-anim';
   div.textContent = text;
   div.style.color = color;
-  div.style.left = (rect.left - wRect.left + rect.width / 2 - 20) + 'px';
-  div.style.top  = (rect.top  - wRect.top) + 'px';
+  div.style.left = (gl - wl + 7 + col * (cs + 2) + cs / 2 - 20) + 'px';
+  div.style.top  = (gt - wt + 7 + row * (cs + 2)) + 'px';
   wrap.style.position = 'relative';
   wrap.appendChild(div);
   setTimeout(() => div.remove(), 450);
@@ -962,10 +968,10 @@ function fxTick(ts) {
 
 // ─── Per-event FX ─────────────────────────────────────────────────────────────
 function cellCenter(idx) {
-  const el = gridEl.children[idx];
-  if (!el) return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-  const r = el.getBoundingClientRect();
-  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  if (idx < 0 || idx >= COLS * ROWS) return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  const { cs, gl, gt } = getCM();
+  const col = idx % COLS, row = Math.floor(idx / COLS);
+  return { x: gl + 7 + col * (cs + 2) + cs / 2, y: gt + 7 + row * (cs + 2) + cs / 2 };
 }
 
 function flashCell(idx, cls) {
@@ -1018,7 +1024,7 @@ function adjustCellSize() {
   gridEl.style.fontSize = Math.max(10, size - 14) + 'px';
 }
 
-window.addEventListener('resize', () => { adjustCellSize(); });
+window.addEventListener('resize', () => { adjustCellSize(); _cm = null; });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 adjustCellSize();
