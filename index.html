@@ -301,25 +301,22 @@
     100% { transform: translateY(-40px); opacity: 0; }
   }
 
-  /* ── Cell flash effects ── */
-  @keyframes flash-dig {
-    0%   { filter: brightness(4) saturate(0); transform: scale(1.15); }
-    60%  { transform: scale(0.92); }
-    100% { filter: none; transform: scale(1); }
+  /* ── Cell flash effects (opacity overlay — no CSS filter, GPU friendly) ── */
+  .cell::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    opacity: 0;
+    pointer-events: none;
   }
-  @keyframes flash-ore {
-    0%   { filter: brightness(6) hue-rotate(80deg) saturate(5); transform: scale(1.3); }
-    60%  { transform: scale(1.05); }
-    100% { filter: none; transform: scale(1); }
+  @keyframes fl {
+    0%   { opacity: .85; }
+    100% { opacity: 0; }
   }
-  @keyframes flash-bomb {
-    0%   { filter: brightness(8) saturate(0); transform: scale(1.4); }
-    30%  { filter: brightness(3) saturate(3) hue-rotate(340deg); transform: scale(1.1); }
-    100% { filter: none; transform: scale(1); }
-  }
-  .flash-dig  { animation: flash-dig  .22s ease-out forwards !important; }
-  .flash-ore  { animation: flash-ore  .3s  ease-out forwards !important; }
-  .flash-bomb { animation: flash-bomb .35s ease-out forwards !important; }
+  .flash-dig::before  { background: #fff;    animation: fl .18s ease-out forwards; }
+  .flash-ore::before  { background: #00ffcc; animation: fl .22s ease-out forwards; }
+  .flash-bomb::before { background: #ff6600; animation: fl .25s ease-out forwards; }
 
   /* ── FX canvas (particle overlay) ── */
   #fx-canvas {
@@ -877,12 +874,18 @@ const SFX = (() => {
   };
 })();
 
-// ─── Particle System ──────────────────────────────────────────────────────────
+// ─── Particle System (lean — fillRect only, no save/restore/rotate) ───────────
 const fxCanvas = document.getElementById('fx-canvas');
 const fxCtx    = fxCanvas.getContext('2d');
-let   particles = [];
-let   fxRafId   = null;
-let   fxLastT   = null;
+
+// Flat typed arrays for max performance: x,y,vx,vy,sz,r,g,b,life,maxLife
+// 10 floats per particle, pre-allocated pool
+const MAX_P  = 64;
+const STRIDE = 10;
+const pool   = new Float32Array(MAX_P * STRIDE);
+let   pCount = 0;
+let   fxRafId = null;
+let   fxLastT = null;
 
 function fxResize() {
   fxCanvas.width  = window.innerWidth;
@@ -891,33 +894,22 @@ function fxResize() {
 window.addEventListener('resize', fxResize);
 fxResize();
 
-function spawnParticles(x, y, { count=8, colors=['#a05020'], size=6,
-    speed=130, gravity=320, life=0.4, shape='square' }) {
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const spd   = speed * (.45 + Math.random() * .9);
-    particles.push({
-      x, y,
-      vx:   Math.cos(angle) * spd,
-      vy:   Math.sin(angle) * spd - speed * .25,
-      sz:   size * (.4 + Math.random() * .9),
-      col:  colors[Math.floor(Math.random() * colors.length)],
-      life, maxLife: life,
-      gravity,
-      shape,
-      rot:  Math.random() * Math.PI * 2,
-      rotV: (Math.random() - .5) * 12,
-    });
+// colors: array of [r,g,b] arrays
+function spawnParticles(ox, oy, count, rgbs, size, speed, grav, life) {
+  for (let i = 0; i < count && pCount < MAX_P; i++, pCount++) {
+    const a   = (i / count) * Math.PI * 2 + (Math.random() - .5) * .8;
+    const spd = speed * (.55 + Math.random() * .7);
+    const o   = pCount * STRIDE;
+    const c   = rgbs[i % rgbs.length];
+    pool[o]   = ox;
+    pool[o+1] = oy;
+    pool[o+2] = Math.cos(a) * spd;
+    pool[o+3] = Math.sin(a) * spd - speed * .2;
+    pool[o+4] = size * (.5 + Math.random() * .7);
+    pool[o+5] = c[0]; pool[o+6] = c[1]; pool[o+7] = c[2];
+    pool[o+8] = life;
+    pool[o+9] = life;
   }
-  fxStart();
-}
-
-function spawnRing(x, y, color, maxR = 58) {
-  particles.push({ type:'ring', x, y, r:6, maxR, col:color, life:.4, maxLife:.4 });
-  fxStart();
-}
-
-function fxStart() {
   if (!fxRafId) { fxLastT = null; fxRafId = requestAnimationFrame(fxTick); }
 }
 
@@ -926,61 +918,33 @@ function fxTick(ts) {
   fxLastT = ts;
   fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
 
-  particles = particles.filter(p => p.life > 0);
+  let alive = 0;
+  for (let i = 0; i < pCount; i++) {
+    const o = i * STRIDE;
+    const life = pool[o+8] - dt;
+    if (life <= 0) { pool[o+8] = 0; continue; }
+    pool[o+8] = life;
+    alive++;
 
-  for (const p of particles) {
-    p.life -= dt;
-    const t = p.life / p.maxLife; // 1→0
+    pool[o+3] += 380 * dt;   // gravity
+    pool[o+2] *= .92;         // friction
+    pool[o]   += pool[o+2] * dt;
+    pool[o+1] += pool[o+3] * dt;
 
-    if (p.type === 'ring') {
-      p.r += (p.maxR - 6) * (dt / p.maxLife);
-      fxCtx.save();
-      fxCtx.globalAlpha = t * .65;
-      fxCtx.strokeStyle = p.col;
-      fxCtx.lineWidth   = 3 * t + 1;
-      fxCtx.beginPath();
-      fxCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      fxCtx.stroke();
-      fxCtx.restore();
-      continue;
-    }
-
-    p.vx *= .93;
-    p.vy += p.gravity * dt;
-    p.x  += p.vx * dt;
-    p.y  += p.vy * dt;
-    p.rot += p.rotV * dt;
-
-    const s = p.sz * (.2 + t * .8);
-    fxCtx.save();
-    fxCtx.globalAlpha = Math.min(1, t * 1.4);
-    fxCtx.fillStyle   = p.col;
-    fxCtx.translate(p.x, p.y);
-    fxCtx.rotate(p.rot);
-
-    if (p.shape === 'circle') {
-      fxCtx.beginPath();
-      fxCtx.arc(0, 0, s / 2, 0, Math.PI * 2);
-      fxCtx.fill();
-    } else if (p.shape === 'star') {
-      fxCtx.beginPath();
-      for (let i = 0; i < 8; i++) {
-        const r = i % 2 === 0 ? s / 2 : s / 4.5;
-        const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
-        i === 0 ? fxCtx.moveTo(Math.cos(a)*r, Math.sin(a)*r)
-                : fxCtx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
-      }
-      fxCtx.closePath();
-      fxCtx.fill();
-    } else { // square (default)
-      fxCtx.fillRect(-s / 2, -s / 2, s, s);
-    }
-    fxCtx.restore();
+    const t = life / pool[o+9];
+    const s = pool[o+4] * t;
+    // set color once per particle, alpha via globalAlpha
+    fxCtx.globalAlpha = t;
+    fxCtx.fillStyle = `rgb(${pool[o+5]|0},${pool[o+6]|0},${pool[o+7]|0})`;
+    fxCtx.fillRect(pool[o] - s * .5, pool[o+1] - s * .5, s, s);
   }
 
-  if (particles.length > 0) {
+  fxCtx.globalAlpha = 1;
+
+  if (alive > 0) {
     fxRafId = requestAnimationFrame(fxTick);
   } else {
+    pCount  = 0;
     fxRafId = null;
     fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
   }
@@ -989,7 +953,7 @@ function fxTick(ts) {
 // ─── Per-event FX ─────────────────────────────────────────────────────────────
 function cellCenter(idx) {
   const el = gridEl.children[idx];
-  if (!el) return { x: window.innerWidth/2, y: window.innerHeight/2 };
+  if (!el) return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   const r = el.getBoundingClientRect();
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 }
@@ -997,10 +961,10 @@ function cellCenter(idx) {
 function flashCell(idx, cls) {
   const el = gridEl.children[idx];
   if (!el) return;
-  ['flash-dig','flash-ore','flash-bomb'].forEach(c => el.classList.remove(c));
-  void el.offsetWidth; // reflow restart
+  el.classList.remove('flash-dig', 'flash-ore', 'flash-bomb');
+  void el.offsetWidth;
   el.classList.add(cls);
-  setTimeout(() => el.classList.remove(cls), 500);
+  setTimeout(() => el.classList.remove(cls), 350);
 }
 
 function screenFlash(color) {
@@ -1011,31 +975,22 @@ function screenFlash(color) {
   sf.classList.add('screen-flash-on');
 }
 
+// Pre-parsed RGB color arrays (avoid string parsing in hot path)
+const C_DIRT = [[139,69,19],[107,50,17],[160,90,40],[192,112,48],[74,32,8]];
+const C_ORE  = [[0,255,170],[64,255,204],[0,238,128],[170,255,238],[255,255,128]];
+const C_BOMB = [[255,68,0],[255,136,0],[255,204,0],[255,34,0],[255,170,0]];
+
 function fxDig(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-dig');
-  spawnParticles(x, y, {
-    count: 7,
-    colors: ['#8b4513','#6b3211','#a05a28','#c07030','#4a2008','#7a3a10'],
-    size: 7, speed: 150, gravity: 360, life: .32, shape: 'square',
-  });
+  spawnParticles(x, y, 5, C_DIRT, 7, 140, 380, .28);
   SFX.dig();
 }
 
 function fxOre(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-ore');
-  spawnParticles(x, y, {
-    count: 11,
-    colors: ['#00ffaa','#40ffcc','#00ee80','#aaffee','#80ffdd','#ffffff'],
-    size: 7, speed: 190, gravity: 140, life: .55, shape: 'star',
-  });
-  spawnParticles(x, y, {
-    count: 6,
-    colors: ['#ffff80','#ffffcc','#ffffff'],
-    size: 4, speed: 230, gravity: 100, life: .38, shape: 'circle',
-  });
-  spawnRing(x, y, '#00ffaa', 50);
+  spawnParticles(x, y, 7, C_ORE, 7, 170, 160, .42);
   SFX.ore();
 }
 
@@ -1043,18 +998,7 @@ function fxBomb(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-bomb');
   screenFlash('#ff2200');
-  spawnParticles(x, y, {
-    count: 14,
-    colors: ['#ff4400','#ff8800','#ffcc00','#ff2200','#ff6600','#ffaa00'],
-    size: 10, speed: 240, gravity: 260, life: .52, shape: 'square',
-  });
-  spawnParticles(x, y, {
-    count: 8,
-    colors: ['#ff6600','#ffcc44','#ffffff'],
-    size: 5, speed: 160, gravity: 180, life: .4, shape: 'circle',
-  });
-  spawnRing(x, y, '#ff8800', 70);
-  spawnRing(x, y, '#ff440044', 90);
+  spawnParticles(x, y, 10, C_BOMB, 9, 210, 280, .45);
   SFX.bomb();
 }
 
