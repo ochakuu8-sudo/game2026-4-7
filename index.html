@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>DigDig Miner ⛏️</title>
+<style>
+  :root {
+    --dirt1: #6b3a1f;
+    --dirt2: #8b4513;
+    --dirt3: #5a2e0a;
+    --cell-size: 36px;
+    --border-radius: 4px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%;
+    background: #0d0804;
+    font-family: 'Arial Black', Arial, sans-serif;
+    color: #fff;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+  }
+  #app {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    max-width: 420px;
+    margin: 0 auto;
+    padding: 8px 8px 6px;
+    gap: 8px;
+  }
+
+  /* ── Header ── */
+  #header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: linear-gradient(135deg, #1a0a00, #2d1500);
+    border: 2px solid #5a3010;
+    border-radius: 10px;
+    padding: 6px 12px;
+  }
+  #title { font-size: 18px; letter-spacing: 1px; color: #f0a030; text-shadow: 0 0 8px #f0a03080; }
+  #stats { display: flex; gap: 14px; align-items: center; }
+  .stat { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .stat-label { font-size: 9px; color: #888; letter-spacing: 1px; text-transform: uppercase; }
+  .stat-value { font-size: 17px; font-weight: bold; }
+  #score-val { color: #4cf; text-shadow: 0 0 6px #4cf8; }
+  #lives-val { color: #f44; text-shadow: 0 0 6px #f448; }
+  #ores-val  { color: #4fc; text-shadow: 0 0 6px #4fc8; }
+
+  /* ── Info bar ── */
+  #infobar {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    font-size: 11px;
+    color: #aaa;
+  }
+  .legend { display: flex; align-items: center; gap: 4px; }
+  .legend-num { font-weight: bold; font-size: 13px; }
+  .leg-green { color: #3f8; }
+  .leg-red   { color: #f54; }
+  .leg-yellow{ color: #ff0; }
+
+  /* ── Grid wrapper ── */
+  #grid-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    width: 100%;
+  }
+  #grid {
+    display: grid;
+    gap: 2px;
+    background: #1a0800;
+    border: 3px solid #3d1f00;
+    border-radius: 8px;
+    padding: 4px;
+  }
+
+  /* ── Cells ── */
+  .cell {
+    width: var(--cell-size);
+    height: var(--cell-size);
+    border-radius: var(--border-radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+    position: relative;
+    transition: transform 0.08s;
+  }
+
+  /* Covered / Dirt */
+  .cell.hidden {
+    background:
+      radial-gradient(circle at 30% 30%, #a0531a 0%, transparent 50%),
+      linear-gradient(135deg, #7a3e18, #6b3211, #5a2a0c, #7a3a14);
+    border-top: 2px solid #c06828;
+    border-left: 2px solid #b05e22;
+    border-bottom: 2px solid #3a1a06;
+    border-right: 2px solid #3a1a06;
+    box-shadow: inset 1px 1px 0 #c07030, inset -1px -1px 0 #2a1004;
+  }
+  .cell.hidden:active { transform: scale(0.92); filter: brightness(0.8); }
+  .cell.hidden::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(255,180,80,0.12) 0%, transparent 40%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect x='0' y='0' width='4' height='4' fill='rgba(0,0,0,0.08)'/%3E%3Crect x='4' y='4' width='4' height='4' fill='rgba(0,0,0,0.08)'/%3E%3C/svg%3E");
+    border-radius: 3px;
+    pointer-events: none;
+  }
+
+  /* Revealed empty */
+  .cell.revealed {
+    background: linear-gradient(135deg, #1c0e04, #251205);
+    border: 1px solid #3a1a06;
+    font-size: 16px;
+  }
+  .cell.revealed.num-green  { color: #3f8; text-shadow: 0 0 6px #3f8a; }
+  .cell.revealed.num-red    { color: #f54; text-shadow: 0 0 6px #f54a; }
+  .cell.revealed.num-yellow { color: #ff0; text-shadow: 0 0 8px #ff08; }
+
+  /* Ore */
+  .cell.ore {
+    background: radial-gradient(circle at 40% 35%, #90ffe0, #00c880 40%, #007850);
+    border: 2px solid #00ffaa;
+    box-shadow: 0 0 8px #00ffaa80, inset 0 0 4px #00ffaa40;
+    font-size: 18px;
+    animation: ore-pulse 2s ease-in-out infinite;
+  }
+  @keyframes ore-pulse {
+    0%,100% { box-shadow: 0 0 8px #00ffaa80, inset 0 0 4px #00ffaa40; }
+    50%      { box-shadow: 0 0 14px #00ffaacc, inset 0 0 6px #00ffaa60; }
+  }
+
+  /* Bomb hit */
+  .cell.bomb-hit {
+    background: radial-gradient(circle, #ff8800, #ff2200 50%, #800000);
+    border: 2px solid #ff4400;
+    box-shadow: 0 0 12px #ff440099;
+    font-size: 18px;
+    animation: explode 0.4s ease-out forwards;
+  }
+  @keyframes explode {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(1.4); }
+    60%  { transform: scale(1.1); }
+    100% { transform: scale(1); }
+  }
+
+  /* Bomb revealed (game over, not hit) */
+  .cell.bomb-revealed {
+    background: linear-gradient(135deg, #3a0808, #600000);
+    border: 1px solid #aa2200;
+    font-size: 17px;
+    opacity: 0.85;
+  }
+
+  /* Flagged */
+  .cell.flagged {
+    background: linear-gradient(135deg, #5a3018, #4a2010);
+    border-top: 2px solid #c06828;
+    border-left: 2px solid #b05e22;
+    border-bottom: 2px solid #3a1a06;
+    border-right: 2px solid #3a1a06;
+    font-size: 16px;
+  }
+
+  /* Ore collected (flash) */
+  .cell.collected {
+    background: radial-gradient(circle, #ffffaa, #ffff00, #80ff40);
+    border: 2px solid #ffff00;
+    animation: collect-flash 0.3s ease-out forwards;
+  }
+  @keyframes collect-flash {
+    0%   { transform: scale(1.3); opacity: 1; }
+    100% { transform: scale(0.8); opacity: 0; }
+  }
+
+  /* ── Buttons ── */
+  #controls {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+  }
+  .btn {
+    padding: 8px 20px;
+    border-radius: 8px;
+    border: 2px solid;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: filter 0.1s, transform 0.1s;
+  }
+  .btn:active { transform: scale(0.95); filter: brightness(0.85); }
+  #btn-new {
+    background: linear-gradient(135deg, #2a5020, #1a3514);
+    border-color: #4a8040;
+    color: #8ffa60;
+  }
+  #btn-flag {
+    background: linear-gradient(135deg, #503020, #351a10);
+    border-color: #80501a;
+    color: #f0a040;
+  }
+  #btn-flag.active {
+    background: linear-gradient(135deg, #804020, #602010);
+    border-color: #f09020;
+    color: #ffcc60;
+    box-shadow: 0 0 8px #f0902060;
+  }
+
+  /* ── Overlay (win/lose) ── */
+  #overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    backdrop-filter: blur(3px);
+  }
+  #overlay.show { display: flex; }
+  #overlay-box {
+    background: linear-gradient(135deg, #1a0d00, #2d1800);
+    border: 3px solid #6a3a10;
+    border-radius: 16px;
+    padding: 28px 36px;
+    text-align: center;
+    max-width: 280px;
+  }
+  #overlay-icon { font-size: 52px; margin-bottom: 10px; }
+  #overlay-title { font-size: 26px; font-weight: bold; margin-bottom: 6px; }
+  #overlay-sub   { font-size: 14px; color: #aaa; margin-bottom: 18px; }
+  #overlay-score { font-size: 20px; margin-bottom: 20px; }
+  #overlay-score span { color: #4cf; font-size: 28px; font-weight: bold; }
+  #btn-retry {
+    padding: 10px 32px;
+    border-radius: 10px;
+    border: 2px solid #4a8040;
+    background: linear-gradient(135deg, #2a5020, #1a3514);
+    color: #8ffa60;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  #btn-retry:active { transform: scale(0.95); }
+
+  /* ── Dig animation overlay ── */
+  .dig-anim {
+    position: absolute;
+    pointer-events: none;
+    font-size: 14px;
+    font-weight: bold;
+    opacity: 1;
+    animation: float-up 0.7s ease-out forwards;
+    z-index: 10;
+    white-space: nowrap;
+  }
+  @keyframes float-up {
+    0%   { transform: translateY(0); opacity: 1; }
+    100% { transform: translateY(-40px); opacity: 0; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <div id="title">⛏️ DigDig</div>
+    <div id="stats">
+      <div class="stat">
+        <div class="stat-label">スコア</div>
+        <div class="stat-value" id="score-val">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">残機</div>
+        <div class="stat-value" id="lives-val">❤️❤️❤️</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">鉱石</div>
+        <div class="stat-value" id="ores-val">0/0</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="infobar">
+    <div class="legend"><span class="legend-num leg-green">3</span><span>= 鉱石のみ</span></div>
+    <div class="legend"><span class="legend-num leg-red">2</span><span>= 爆弾のみ</span></div>
+    <div class="legend"><span class="legend-num leg-yellow">5</span><span>= 両方の合計</span></div>
+  </div>
+
+  <div id="grid-wrap">
+    <div id="grid"></div>
+  </div>
+
+  <div id="controls">
+    <button class="btn" id="btn-flag">🚩 フラグ</button>
+    <button class="btn" id="btn-new">🔄 新しいゲーム</button>
+  </div>
+</div>
+
+<div id="overlay">
+  <div id="overlay-box">
+    <div id="overlay-icon"></div>
+    <div id="overlay-title"></div>
+    <div id="overlay-sub"></div>
+    <div id="overlay-score">スコア: <span id="overlay-score-val">0</span></div>
+    <button id="btn-retry">もう一度！</button>
+  </div>
+</div>
+
+<script>
+// ─── Config ───────────────────────────────────────────────────────────────────
+const COLS       = 10;
+const ROWS       = 14;
+const ORE_COUNT  = 12;
+const BOMB_COUNT = 14;
+const MAX_LIVES  = 3;
+const SCORE_ORE  = 100;
+const SCORE_CELL = 5;
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let cells       = [];   // {type, state, adjOre, adjBomb}
+let lives       = MAX_LIVES;
+let score       = 0;
+let oresFound   = 0;
+let oresTotal   = ORE_COUNT;
+let flagMode    = false;
+let firstTap    = true;
+let gameOver    = false;
+
+// ─── DOM refs ─────────────────────────────────────────────────────────────────
+const gridEl      = document.getElementById('grid');
+const scoreEl     = document.getElementById('score-val');
+const livesEl     = document.getElementById('lives-val');
+const oresEl      = document.getElementById('ores-val');
+const overlayEl   = document.getElementById('overlay');
+const btnFlag     = document.getElementById('btn-flag');
+const btnNew      = document.getElementById('btn-new');
+const btnRetry    = document.getElementById('btn-retry');
+const oIcon       = document.getElementById('overlay-icon');
+const oTitle      = document.getElementById('overlay-title');
+const oSub        = document.getElementById('overlay-sub');
+const oScoreVal   = document.getElementById('overlay-score-val');
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+function initGame() {
+  lives     = MAX_LIVES;
+  score     = 0;
+  oresFound = 0;
+  flagMode  = false;
+  firstTap  = true;
+  gameOver  = false;
+
+  btnFlag.classList.remove('active');
+  overlayEl.classList.remove('show');
+
+  cells = Array.from({ length: COLS * ROWS }, () => ({
+    type: 'empty',   // 'empty' | 'ore' | 'bomb'
+    state: 'hidden', // 'hidden' | 'revealed' | 'flagged'
+    adjOre: 0,
+    adjBomb: 0,
+  }));
+
+  placeMines([], BOMB_COUNT, COLS * ROWS);
+  placeOres(BOMB_COUNT);
+  calcAdjacency();
+  renderGrid();
+  updateHUD();
+}
+
+function placeMines(exclude, count, total) {
+  let placed = 0;
+  while (placed < count) {
+    const idx = Math.floor(Math.random() * total);
+    if (!exclude.includes(idx) && cells[idx].type === 'empty') {
+      cells[idx].type = 'bomb';
+      placed++;
+    }
+  }
+}
+
+function placeOres(existingBombs) {
+  let placed = 0;
+  while (placed < ORE_COUNT) {
+    const idx = Math.floor(Math.random() * COLS * ROWS);
+    if (cells[idx].type === 'empty') {
+      cells[idx].type = 'ore';
+      placed++;
+    }
+  }
+}
+
+function ensureSafeFirst(idx) {
+  // If first tap hits bomb or ore, move it away
+  if (cells[idx].type === 'bomb' || cells[idx].type === 'ore') {
+    const orig = cells[idx].type;
+    cells[idx].type = 'empty';
+    let placed = false;
+    // Find a new spot
+    for (let i = 0; i < COLS * ROWS && !placed; i++) {
+      const ri = Math.floor(Math.random() * COLS * ROWS);
+      if (ri !== idx && cells[ri].type === 'empty') {
+        cells[ri].type = orig;
+        placed = true;
+      }
+    }
+    calcAdjacency();
+  }
+  // Also ensure neighbors of first tap are safe from bombs (Minesweeper courtesy)
+  const nbrs = neighbors(idx);
+  nbrs.forEach(ni => {
+    if (cells[ni].type === 'bomb') {
+      cells[ni].type = 'empty';
+      // Relocate bomb
+      let placed = false;
+      for (let t = 0; t < COLS * ROWS * 2 && !placed; t++) {
+        const ri = Math.floor(Math.random() * COLS * ROWS);
+        if (ri !== idx && !nbrs.includes(ri) && cells[ri].type === 'empty') {
+          cells[ri].type = 'bomb';
+          placed = true;
+        }
+      }
+    }
+  });
+  calcAdjacency();
+}
+
+function calcAdjacency() {
+  for (let i = 0; i < COLS * ROWS; i++) {
+    cells[i].adjOre  = 0;
+    cells[i].adjBomb = 0;
+    neighbors(i).forEach(ni => {
+      if (cells[ni].type === 'ore')  cells[i].adjOre++;
+      if (cells[ni].type === 'bomb') cells[i].adjBomb++;
+    });
+  }
+}
+
+function neighbors(idx) {
+  const r = Math.floor(idx / COLS);
+  const c = idx % COLS;
+  const res = [];
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const nr = r + dr, nc = c + dc;
+      if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS)
+        res.push(nr * COLS + nc);
+    }
+  }
+  return res;
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function renderGrid() {
+  gridEl.style.gridTemplateColumns = `repeat(${COLS}, var(--cell-size))`;
+  gridEl.innerHTML = '';
+  for (let i = 0; i < COLS * ROWS; i++) {
+    const el = document.createElement('div');
+    el.className = 'cell';
+    el.dataset.idx = i;
+    applyCell(el, i);
+    gridEl.appendChild(el);
+  }
+}
+
+function applyCell(el, i) {
+  const c = cells[i];
+  el.className = 'cell';
+  el.textContent = '';
+
+  if (c.state === 'hidden') {
+    el.classList.add('hidden');
+  } else if (c.state === 'flagged') {
+    el.classList.add('flagged');
+    el.textContent = '🚩';
+  } else {
+    // revealed
+    if (c.type === 'bomb') {
+      el.classList.add('bomb-hit');
+      el.textContent = '💣';
+    } else if (c.type === 'ore') {
+      el.classList.add('ore');
+      el.textContent = oreEmoji(i);
+    } else {
+      el.classList.add('revealed');
+      const total = c.adjOre + c.adjBomb;
+      if (total > 0) {
+        el.textContent = total;
+        if (c.adjOre > 0 && c.adjBomb > 0) {
+          el.classList.add('num-yellow');
+        } else if (c.adjOre > 0) {
+          el.classList.add('num-green');
+        } else {
+          el.classList.add('num-red');
+        }
+      }
+    }
+  }
+}
+
+function oreEmoji(i) {
+  const gems = ['💎','🔷','🟢','💚','🔵'];
+  return gems[i % gems.length];
+}
+
+function refreshCell(i) {
+  const el = gridEl.children[i];
+  if (el) applyCell(el, i);
+}
+
+function updateHUD() {
+  scoreEl.textContent = score;
+  const hearts = '❤️'.repeat(lives) + '🖤'.repeat(MAX_LIVES - lives);
+  livesEl.textContent = hearts || '💀';
+  oresEl.textContent  = `${oresFound}/${oresTotal}`;
+}
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+gridEl.addEventListener('click', e => {
+  const el = e.target.closest('.cell');
+  if (!el || gameOver) return;
+  const idx = +el.dataset.idx;
+  handleTap(idx);
+});
+
+// Long press = flag (without flag mode button)
+let pressTimer = null;
+gridEl.addEventListener('touchstart', e => {
+  const el = e.target.closest('.cell');
+  if (!el || gameOver) return;
+  const idx = +el.dataset.idx;
+  pressTimer = setTimeout(() => {
+    pressTimer = null;
+    if (cells[idx].state !== 'revealed') toggleFlag(idx);
+  }, 450);
+}, { passive: true });
+
+gridEl.addEventListener('touchend', () => {
+  clearTimeout(pressTimer);
+}, { passive: true });
+
+gridEl.addEventListener('touchmove', () => {
+  clearTimeout(pressTimer);
+}, { passive: true });
+
+btnFlag.addEventListener('click', () => {
+  flagMode = !flagMode;
+  btnFlag.classList.toggle('active', flagMode);
+});
+
+btnNew.addEventListener('click', initGame);
+btnRetry.addEventListener('click', initGame);
+
+function handleTap(idx) {
+  const c = cells[idx];
+  if (c.state === 'revealed') return;
+
+  if (flagMode) {
+    toggleFlag(idx);
+    return;
+  }
+  if (c.state === 'flagged') return; // must unflag first (or long-press)
+
+  if (firstTap) {
+    firstTap = false;
+    ensureSafeFirst(idx);
+    // re-render after possible relocations
+    renderGrid();
+  }
+
+  reveal(idx);
+}
+
+function toggleFlag(idx) {
+  const c = cells[idx];
+  if (c.state === 'hidden') {
+    c.state = 'flagged';
+  } else if (c.state === 'flagged') {
+    c.state = 'hidden';
+  }
+  refreshCell(idx);
+}
+
+// ─── Reveal logic ─────────────────────────────────────────────────────────────
+function reveal(idx) {
+  const c = cells[idx];
+  if (c.state !== 'hidden') return;
+
+  if (c.type === 'bomb') {
+    hitBomb(idx);
+    return;
+  }
+
+  if (c.type === 'ore') {
+    collectOre(idx);
+    return;
+  }
+
+  // Empty cell
+  c.state = 'revealed';
+  score += SCORE_CELL;
+  refreshCell(idx);
+  floatText(idx, `+${SCORE_CELL}`, '#8888ff');
+
+  if (c.adjOre === 0 && c.adjBomb === 0) {
+    // Flood fill
+    neighbors(idx).forEach(ni => {
+      if (cells[ni].state === 'hidden') reveal(ni);
+    });
+  }
+
+  updateHUD();
+  checkWin();
+}
+
+function collectOre(idx) {
+  const c = cells[idx];
+  c.state = 'revealed';
+
+  const el = gridEl.children[idx];
+  el.className = 'cell collected';
+  el.textContent = oreEmoji(idx);
+
+  oresFound++;
+  score += SCORE_ORE;
+
+  setTimeout(() => {
+    applyCell(el, idx);
+  }, 320);
+
+  floatText(idx, `+${SCORE_ORE}`, '#00ffaa');
+  updateHUD();
+  checkWin();
+}
+
+function hitBomb(idx) {
+  const c = cells[idx];
+  c.state = 'revealed';
+  refreshCell(idx);
+
+  lives--;
+  updateHUD();
+  shakeGrid();
+
+  if (lives <= 0) {
+    setTimeout(() => endGame(false), 600);
+  } else {
+    floatText(idx, `💥 -1`, '#ff4400');
+  }
+}
+
+function shakeGrid() {
+  gridEl.animate([
+    { transform: 'translateX(-4px)' },
+    { transform: 'translateX(4px)' },
+    { transform: 'translateX(-3px)' },
+    { transform: 'translateX(3px)' },
+    { transform: 'translateX(0)' },
+  ], { duration: 250, easing: 'ease-out' });
+}
+
+function checkWin() {
+  if (oresFound >= oresTotal) {
+    setTimeout(() => endGame(true), 400);
+  }
+}
+
+// ─── Game End ─────────────────────────────────────────────────────────────────
+function endGame(won) {
+  gameOver = true;
+
+  if (!won) {
+    // Reveal all bombs
+    for (let i = 0; i < COLS * ROWS; i++) {
+      if (cells[i].type === 'bomb' && cells[i].state === 'hidden') {
+        cells[i].state = 'revealed';
+        const el = gridEl.children[i];
+        el.className = 'cell bomb-revealed';
+        el.textContent = '💣';
+      }
+    }
+  }
+
+  setTimeout(() => {
+    oIcon.textContent       = won ? '🏆' : '💥';
+    oTitle.textContent      = won ? 'クリア！' : 'ゲームオーバー';
+    oSub.textContent        = won
+      ? `全${oresTotal}個の鉱石を発掘した！`
+      : `爆弾を踏みすぎた…`;
+    oScoreVal.textContent   = score;
+    oTitle.style.color      = won ? '#4fc' : '#f54';
+    overlayEl.classList.add('show');
+  }, won ? 300 : 700);
+}
+
+// ─── Float text ───────────────────────────────────────────────────────────────
+function floatText(idx, text, color) {
+  const el = gridEl.children[idx];
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const wrap = document.getElementById('grid-wrap');
+  const wRect = wrap.getBoundingClientRect();
+
+  const div = document.createElement('div');
+  div.className = 'dig-anim';
+  div.textContent = text;
+  div.style.color = color;
+  div.style.left = (rect.left - wRect.left + rect.width / 2 - 20) + 'px';
+  div.style.top  = (rect.top  - wRect.top) + 'px';
+  wrap.style.position = 'relative';
+  wrap.appendChild(div);
+  setTimeout(() => div.remove(), 800);
+}
+
+// ─── Responsive cell size ─────────────────────────────────────────────────────
+function adjustCellSize() {
+  const avW = Math.min(window.innerWidth, 420) - 24;  // padding
+  const avH = window.innerHeight - 170; // header + controls + gaps
+  const byW = Math.floor((avW - 10) / COLS) - 2;
+  const byH = Math.floor((avH - 10) / ROWS) - 2;
+  const size = Math.max(24, Math.min(byW, byH, 40));
+  document.documentElement.style.setProperty('--cell-size', size + 'px');
+  document.documentElement.style.setProperty('--border-radius', Math.max(2, Math.round(size / 10)) + 'px');
+  // font size scales too
+  gridEl.style.fontSize = Math.max(10, size - 14) + 'px';
+}
+
+window.addEventListener('resize', () => { adjustCellSize(); });
+
+// ─── Start ────────────────────────────────────────────────────────────────────
+adjustCellSize();
+initGame();
+</script>
+</body>
+</html>
