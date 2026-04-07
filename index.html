@@ -98,6 +98,7 @@
     font-weight: bold;
     cursor: pointer;
     position: relative;
+    contain: layout paint;
   }
 
   /* Covered / Dirt — not yet reachable (dark, uninteractable) */
@@ -484,38 +485,28 @@ function renderGrid() {
 
 function applyCell(el, i) {
   const c = cells[i];
-  el.className = 'cell';
-  el.textContent = '';
-
+  // className を一度だけ代入してスタイル再計算を1回に抑える
+  let cls = 'cell', text = '';
   if (c.state === 'hidden') {
-    el.classList.add('hidden');
-    if (c.reachable) el.classList.add('reachable');
+    cls = c.reachable ? 'cell hidden reachable' : 'cell hidden';
   } else if (c.state === 'flagged') {
-    el.classList.add('flagged');
-    el.textContent = '🚩';
+    cls = 'cell flagged'; text = '🚩';
   } else {
-    // revealed
     if (c.type === 'bomb') {
-      el.classList.add('bomb-hit');
-      el.textContent = '💣';
+      cls = 'cell bomb-hit'; text = '💣';
     } else if (c.type === 'ore') {
-      el.classList.add('ore');
-      el.textContent = oreEmoji(i);
+      cls = 'cell ore'; text = oreEmoji(i);
     } else {
-      el.classList.add('revealed');
       const total = c.adjOre + c.adjBomb;
-      if (total > 0) {
-        el.textContent = total;
-        if (c.adjOre > 0 && c.adjBomb > 0) {
-          el.classList.add('num-yellow');
-        } else if (c.adjOre > 0) {
-          el.classList.add('num-green');
-        } else {
-          el.classList.add('num-red');
-        }
-      }
+      cls = total === 0 ? 'cell revealed'
+          : (c.adjOre > 0 && c.adjBomb > 0) ? 'cell revealed num-yellow'
+          : c.adjOre > 0                     ? 'cell revealed num-green'
+          :                                    'cell revealed num-red';
+      text = total > 0 ? String(total) : '';
     }
   }
+  el.className = cls;
+  el.textContent = text;
 }
 
 function oreEmoji(i) {
