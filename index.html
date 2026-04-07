@@ -810,18 +810,16 @@ function getCM() {
   return (_cm = { cs, gl: gr.left, gt: gr.top, wl: wr.left, wt: wr.top });
 }
 
-// ─── Float text (canvas-based, no DOM element creation) ──────────────────────
-const textFloats = [];
-
+// ─── Float text → Workerに送信 ───────────────────────────────────────────────
 function floatText(idx, text, color) {
   const { cs, gl, gt } = getCM();
   const col = idx % COLS, row = Math.floor(idx / COLS);
-  textFloats.push({
+  fxWorker.postMessage({
+    type: 'text',
     x: (gl + 7 + col * (cs + 2) + cs / 2) | 0,
     y: (gt + 7 + row * (cs + 2)) | 0,
-    text, color, life: 0.4, maxLife: 0.4,
+    text, color,
   });
-  if (!fxRafId) { fxLastT = null; fxRafId = requestAnimationFrame(fxTick); }
 }
 
 // ─── Audio (Web Audio API — procedural synthesis, no files needed) ───────────
@@ -909,123 +907,99 @@ const SFX = (() => {
 })();
 
 // ─── Animation helpers ───────────────────────────────────────────────────────
-const SPRING = 'cubic-bezier(0.34, 1.56, 0.64, 1)'; // バウンスオーバーシュート
-const SNAP   = 'cubic-bezier(0.4, 0, 1, 1)';         // 素早く押し込む感じ
-// Float32Array pool: x,y,vx,vy,sz,life,maxLife,colorIdx  (STRIDE=8)
-// - No globalAlpha (fade expressed as shrinking size → 0 GC, 0 state changes)
-// - fillStyle only when colorIdx changes (same-event particles share palette)
-// - Dirty-rect clear: only erase pixels that were drawn last frame
-const fxCanvas = document.getElementById('fx-canvas');
-const fxCtx    = fxCanvas.getContext('2d');
-const MAX_P    = 96;
-const STRIDE   = 8;
-const pool     = new Float32Array(MAX_P * STRIDE);
-let   pCount   = 0;
-let   fxRafId  = null;
-let   fxLastT  = null;
-let   fxDirty  = null; // {x,y,w,h} of last drawn area → cleared next frame
+const SPRING = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+const SNAP   = 'cubic-bezier(0.4, 0, 1, 1)';
 
-function fxResize() {
-  fxCanvas.width  = window.innerWidth;
-  fxCanvas.height = window.innerHeight;
-}
-window.addEventListener('resize', fxResize);
-fxResize();
+// ─── Particle Worker (OffscreenCanvas) ───────────────────────────────────────
+// パーティクル物理演算・描画をWorkerスレッドに移動してメインスレッドを解放
+const WORKER_SRC = `
+const MAX_P=96, STRIDE=8;
+const pool=new Float32Array(MAX_P*STRIDE);
+const PAL=['#8b4513','#6b3211','#a05a28','#c07030','#4a2008',
+           '#00ffaa','#40ffcc','#00ee80','#aaffee','#ffff88',
+           '#ff4400','#ff8800','#ffcc00','#ff2200','#ff6600'];
+const textFloats=[];
+let pCount=0, fxDirty=null, fxLastT=null, tickId=null, ctx=null;
 
-// Color palette — pre-built strings, indexed per particle (no string creation in hot loop)
-const PAL = [
-  '#8b4513','#6b3211','#a05a28','#c07030','#4a2008', // 0-4 dirt
-  '#00ffaa','#40ffcc','#00ee80','#aaffee','#ffff88',  // 5-9 ore
-  '#ff4400','#ff8800','#ffcc00','#ff2200','#ff6600',  // 10-14 bomb
-];
-
-function spawnParticles(ox, oy, count, palStart, palLen, size, speed, life) {
-  for (let i = 0; i < count && pCount < MAX_P; i++, pCount++) {
-    const a   = (i / count) * Math.PI * 2 + (Math.random() - .5);
-    const spd = speed * (.5 + Math.random() * .7);
-    const o   = pCount * STRIDE;
-    pool[o]   = ox;
-    pool[o+1] = oy;
-    pool[o+2] = Math.cos(a) * spd;
-    pool[o+3] = Math.sin(a) * spd - speed * .2;
-    pool[o+4] = size * (.5 + Math.random() * .7);
-    pool[o+5] = life;
-    pool[o+6] = life;
-    pool[o+7] = palStart + (i % palLen);
-  }
-  if (!fxRafId) { fxLastT = null; fxRafId = requestAnimationFrame(fxTick); }
-}
-
-function fxTick(ts) {
-  const dt = fxLastT ? Math.min((ts - fxLastT) / 1000, .05) : .016;
-  fxLastT = ts;
-
-  // Clear only previously drawn dirty rect (not full screen)
-  if (fxDirty) {
-    fxCtx.clearRect(fxDirty.x, fxDirty.y, fxDirty.w, fxDirty.h);
-    fxDirty = null;
-  }
-
-  let alive = 0;
-  let x1 = 9999, y1 = 9999, x2 = -9999, y2 = -9999;
-  let lastCI = -1;
-
-  for (let i = 0; i < pCount; i++) {
-    const o = i * STRIDE;
-    const life = pool[o+5] - dt;
-    if (life <= 0) { pool[o+5] = 0; continue; }
-    pool[o+5] = life;
-    alive++;
-
-    pool[o+3] += 380 * dt;  // gravity
-    pool[o+2] *= .92;        // air friction
-    pool[o]   += pool[o+2] * dt;
-    pool[o+1] += pool[o+3] * dt;
-
-    const t  = life / pool[o+6];
-    const s  = Math.max(1, (pool[o+4] * t) | 0); // size fades to zero (no globalAlpha needed)
-    const px = (pool[o]   - s * .5) | 0;
-    const py = (pool[o+1] - s * .5) | 0;
-    const ci = pool[o+7] | 0;
-
-    if (ci !== lastCI) { fxCtx.fillStyle = PAL[ci]; lastCI = ci; }
-    fxCtx.fillRect(px, py, s, s);
-
-    if (px     < x1) x1 = px;
-    if (py     < y1) y1 = py;
-    if (px + s > x2) x2 = px + s;
-    if (py + s > y2) y2 = py + s;
-  }
-
-  // ── Text floats ──
-  if (textFloats.length > 0) {
-    fxCtx.font = 'bold 14px "Arial Black",Arial,sans-serif';
-    for (let i = textFloats.length - 1; i >= 0; i--) {
-      const f = textFloats[i];
-      f.life -= dt;
-      if (f.life <= 0) { textFloats.splice(i, 1); continue; }
-      alive++;
-      const t = f.life / f.maxLife;
-      const fy = (f.y - (1 - t) * 28) | 0;
-      fxCtx.globalAlpha = t;
-      fxCtx.fillStyle = f.color;
-      fxCtx.fillText(f.text, f.x - 20, fy);
-      if (f.x - 20 < x1) x1 = f.x - 20;
-      if (fy - 16  < y1) y1 = fy - 16;
-      if (f.x + 60 > x2) x2 = f.x + 60;
-      if (fy + 4   > y2) y2 = fy + 4;
+self.onmessage = e => {
+  const d=e.data;
+  if (d.type==='init') {
+    ctx=d.canvas.getContext('2d');
+    ctx.canvas.width=d.w; ctx.canvas.height=d.h;
+  } else if (d.type==='resize') {
+    if(ctx){ctx.canvas.width=d.w;ctx.canvas.height=d.h;}
+  } else if (d.type==='spawn') {
+    for(let i=0;i<d.count&&pCount<MAX_P;i++,pCount++){
+      const a=(i/d.count)*Math.PI*2+(Math.random()-.5);
+      const spd=d.speed*(.5+Math.random()*.7);
+      const o=pCount*STRIDE;
+      pool[o]=d.ox;pool[o+1]=d.oy;
+      pool[o+2]=Math.cos(a)*spd;pool[o+3]=Math.sin(a)*spd-d.speed*.2;
+      pool[o+4]=d.size*(.5+Math.random()*.7);
+      pool[o+5]=d.life;pool[o+6]=d.life;
+      pool[o+7]=d.palStart+(i%d.palLen);
     }
-    fxCtx.globalAlpha = 1;
+    startLoop();
+  } else if (d.type==='text') {
+    textFloats.push({x:d.x,y:d.y,text:d.text,color:d.color,life:.4,maxLife:.4});
+    startLoop();
   }
+};
 
-  if (alive > 0) {
-    fxDirty = { x: x1 - 1, y: y1 - 1, w: x2 - x1 + 2, h: y2 - y1 + 2 };
-    fxRafId = requestAnimationFrame(fxTick);
+function startLoop(){if(!tickId&&ctx)tickId=setInterval(tick,15);}
+
+function tick(){
+  const now=performance.now();
+  const dt=fxLastT?Math.min((now-fxLastT)/1000,.05):.016;
+  fxLastT=now;
+  if(fxDirty){ctx.clearRect(fxDirty.x,fxDirty.y,fxDirty.w,fxDirty.h);fxDirty=null;}
+  let alive=0,x1=9999,y1=9999,x2=-9999,y2=-9999,lastCI=-1;
+  for(let i=0;i<pCount;i++){
+    const o=i*STRIDE;
+    const life=pool[o+5]-dt;
+    if(life<=0){pool[o+5]=0;continue;}
+    pool[o+5]=life;alive++;
+    pool[o+3]+=380*dt;pool[o+2]*=.92;
+    pool[o]+=pool[o+2]*dt;pool[o+1]+=pool[o+3]*dt;
+    const t=life/pool[o+6];
+    const s=Math.max(1,(pool[o+4]*t)|0);
+    const px=(pool[o]-s*.5)|0,py=(pool[o+1]-s*.5)|0;
+    const ci=pool[o+7]|0;
+    if(ci!==lastCI){ctx.fillStyle=PAL[ci];lastCI=ci;}
+    ctx.fillRect(px,py,s,s);
+    if(px<x1)x1=px;if(py<y1)y1=py;if(px+s>x2)x2=px+s;if(py+s>y2)y2=py+s;
+  }
+  if(textFloats.length>0){
+    ctx.font='bold 14px "Arial Black",Arial,sans-serif';
+    for(let i=textFloats.length-1;i>=0;i--){
+      const f=textFloats[i];f.life-=dt;
+      if(f.life<=0){textFloats.splice(i,1);continue;}
+      alive++;
+      const t=f.life/f.maxLife,fy=(f.y-(1-t)*28)|0;
+      ctx.globalAlpha=t;ctx.fillStyle=f.color;
+      ctx.fillText(f.text,f.x-20,fy);
+      if(f.x-20<x1)x1=f.x-20;if(fy-16<y1)y1=fy-16;
+      if(f.x+60>x2)x2=f.x+60;if(fy+4>y2)y2=fy+4;
+    }
+    ctx.globalAlpha=1;
+  }
+  if(alive>0){
+    fxDirty={x:x1-1,y:y1-1,w:x2-x1+2,h:y2-y1+2};
   } else {
-    if (x1 < 9999) fxCtx.clearRect(x1-1, y1-1, x2-x1+2, y2-y1+2);
-    pCount = 0; fxRafId = null; fxLastT = null;
+    if(x1<9999)ctx.clearRect(x1-1,y1-1,x2-x1+2,y2-y1+2);
+    pCount=0;clearInterval(tickId);tickId=null;fxLastT=null;
   }
 }
+`;
+
+const fxCanvas  = document.getElementById('fx-canvas');
+const fxBlob    = new Blob([WORKER_SRC], { type: 'application/javascript' });
+const fxWorker  = new Worker(URL.createObjectURL(fxBlob));
+const offscreen = fxCanvas.transferControlToOffscreen();
+fxWorker.postMessage({ type: 'init', canvas: offscreen, w: window.innerWidth, h: window.innerHeight }, [offscreen]);
+window.addEventListener('resize', () => {
+  fxWorker.postMessage({ type: 'resize', w: window.innerWidth, h: window.innerHeight });
+});
 
 // ─── Per-event FX ─────────────────────────────────────────────────────────────
 function cellCenter(idx) {
@@ -1053,14 +1027,14 @@ function screenFlash(color) {
 function fxDig(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-dig');
-  spawnParticles(x, y, 10, 0, 5, 8, 220, .25);
+  fxWorker.postMessage({ type:'spawn', ox:x, oy:y, count:10, palStart:0,  palLen:5, size:8,  speed:220, life:.25 });
   SFX.dig();
 }
 
 function fxOre(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-ore');
-  spawnParticles(x, y, 18, 5, 5, 9, 280, .38);
+  fxWorker.postMessage({ type:'spawn', ox:x, oy:y, count:18, palStart:5,  palLen:5, size:9,  speed:280, life:.38 });
   SFX.ore();
 }
 
@@ -1068,7 +1042,7 @@ function fxBomb(idx) {
   const { x, y } = cellCenter(idx);
   flashCell(idx, 'flash-bomb');
   screenFlash('#ff2200');
-  spawnParticles(x, y, 24, 10, 5, 11, 320, .38);
+  fxWorker.postMessage({ type:'spawn', ox:x, oy:y, count:24, palStart:10, palLen:5, size:11, speed:320, life:.38 });
   SFX.bomb();
 }
 
