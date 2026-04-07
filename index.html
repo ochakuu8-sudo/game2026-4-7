@@ -554,10 +554,9 @@ function animateCellRelease(idx) {
   _pressAnim = null;
   const el = gridEl.children[idx];
   if (!el) return;
-  // バウンスで戻る：0.78 → 1.12 → 1
   el.animate(
-    [{ transform: 'scale(0.78)' }, { transform: 'scale(1.12)' }, { transform: 'scale(1)' }],
-    { duration: 260, easing: SPRING }
+    [{ transform: 'scale(0.78)' }, { transform: 'scale(1.1)' }, { transform: 'scale(1)' }],
+    { duration: 160, easing: SPRING }
   );
 }
 
@@ -659,10 +658,12 @@ function reveal(idx) {
   c.state = 'revealed';
   score += SCORE_CELL;
   refreshCell(idx);
-  // 掘った瞬間のポップ
-  gridEl.children[idx].animate(
-    [{ transform: 'scale(0.8)' }, { transform: 'scale(1.1)' }, { transform: 'scale(1)' }],
-    { duration: 220, easing: SPRING }
+  // 掘った瞬間のポップ（既存アニメーションをキャンセルしてから開始）
+  const digEl = gridEl.children[idx];
+  digEl.getAnimations().forEach(a => a.cancel());
+  digEl.animate(
+    [{ transform: 'scale(0.8)' }, { transform: 'scale(1.08)' }, { transform: 'scale(1)' }],
+    { duration: 160, easing: SPRING }
   );
   fxDig(idx);
   floatText(idx, `+${SCORE_CELL}`, '#8888ff');
@@ -679,11 +680,6 @@ function unlockNeighbors(idx) {
     if (cells[ni].state !== 'revealed' && !cells[ni].reachable) {
       cells[ni].reachable = true;
       refreshCell(ni);
-      // 隣接セルが解放される小さなポップ
-      gridEl.children[ni].animate(
-        [{ transform: 'scale(0.88)' }, { transform: 'scale(1)' }],
-        { duration: 180, easing: SPRING }
-      );
     }
   });
 }
