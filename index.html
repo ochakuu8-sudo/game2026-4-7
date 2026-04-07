@@ -52,6 +52,7 @@
   #score-val { color: #4cf; text-shadow: 0 0 6px #4cf8; }
   #lives-val { color: #f44; text-shadow: 0 0 6px #f448; }
   #ores-val  { color: #4fc; text-shadow: 0 0 6px #4fc8; }
+  #depth-val { color: #fa0; text-shadow: 0 0 6px #fa08; }
 
   /* ── Info bar ── */
   #infobar {
@@ -317,6 +318,10 @@
         <div class="stat-label">鉱石</div>
         <div class="stat-value" id="ores-val">0/0</div>
       </div>
+      <div class="stat">
+        <div class="stat-label">深度</div>
+        <div class="stat-value" id="depth-val">0</div>
+      </div>
     </div>
   </div>
 
@@ -368,6 +373,8 @@ let oresFound   = 0;
 let oresTotal   = ORE_COUNT;
 let flagMode    = false;
 let gameOver    = false;
+let worldDepth  = 0;
+let isScrolling = false;
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const gridEl      = document.getElementById('grid');
@@ -382,14 +389,17 @@ const oIcon       = document.getElementById('overlay-icon');
 const oTitle      = document.getElementById('overlay-title');
 const oSub        = document.getElementById('overlay-sub');
 const oScoreVal   = document.getElementById('overlay-score-val');
+const depthEl     = document.getElementById('depth-val');
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 function initGame() {
-  lives     = MAX_LIVES;
-  score     = 0;
-  oresFound = 0;
-  flagMode  = false;
-  gameOver  = false;
+  lives       = MAX_LIVES;
+  score       = 0;
+  oresFound   = 0;
+  flagMode    = false;
+  gameOver    = false;
+  worldDepth  = 0;
+  isScrolling = false;
 
   btnFlag.classList.remove('active');
   overlayEl.classList.remove('show');
@@ -524,6 +534,7 @@ function updateHUD() {
   const hearts = '❤️'.repeat(lives) + '🖤'.repeat(MAX_LIVES - lives);
   livesEl.textContent = hearts || '💀';
   oresEl.textContent  = `${oresFound}/${oresTotal}`;
+  depthEl.textContent = worldDepth;
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
@@ -667,6 +678,7 @@ function reveal(idx) {
   unlockNeighbors(idx);
 
   updateHUD();
+  checkScrollTrigger(idx);
   checkWin();
 }
 
@@ -677,6 +689,94 @@ function unlockNeighbors(idx) {
       refreshCell(ni);
     }
   });
+}
+
+// ─── Scroll / Dig-down system ─────────────────────────────────────────────────
+function checkScrollTrigger(idx) {
+  if (isScrolling || gameOver) return;
+  const row = Math.floor(idx / COLS);
+  if (row >= ROWS - 2) scrollDown();
+}
+
+function generateNewRow() {
+  const newRow = Array.from({ length: COLS }, () => ({
+    type: 'empty', state: 'hidden', reachable: false, adjOre: 0, adjBomb: 0,
+  }));
+  // Place bombs ~1 per row on average
+  for (let c = 0; c < COLS; c++) {
+    if (Math.random() < 0.10) newRow[c].type = 'bomb';
+  }
+  // Place ores ~1 per row on average (only on empty cells)
+  for (let c = 0; c < COLS; c++) {
+    if (newRow[c].type === 'empty' && Math.random() < 0.10) newRow[c].type = 'ore';
+  }
+  return newRow;
+}
+
+function recalcAdjacencyForRow(row) {
+  for (let c = 0; c < COLS; c++) {
+    const i = row * COLS + c;
+    cells[i].adjOre  = 0;
+    cells[i].adjBomb = 0;
+    neighbors(i).forEach(ni => {
+      if (cells[ni].type === 'ore')  cells[i].adjOre++;
+      if (cells[ni].type === 'bomb') cells[i].adjBomb++;
+    });
+  }
+}
+
+function updateReachabilityForRow(row) {
+  for (let c = 0; c < COLS; c++) {
+    const i = row * COLS + c;
+    if (cells[i].state === 'hidden' && !cells[i].reachable) {
+      if (neighbors(i).some(ni => cells[ni].state === 'revealed')) {
+        cells[i].reachable = true;
+      }
+    }
+  }
+}
+
+function scrollDown() {
+  if (isScrolling || gameOver) return;
+  isScrolling = true;
+  worldDepth++;
+
+  // Animate grid sliding up by one cell row
+  const cs = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell-size')) || 36;
+  gridEl.animate(
+    [{ transform: 'translateY(0)' }, { transform: `translateY(-${cs + 2}px)` }],
+    { duration: 220, easing: 'ease-in-out' }
+  );
+
+  SFX.scroll();
+
+  setTimeout(() => {
+    // Generate new bottom row
+    const newRowCells = generateNewRow();
+    for (const c of newRowCells) {
+      if (c.type === 'ore') oresTotal++;
+    }
+
+    // Shift cells array: drop top row, append new bottom row
+    cells = [...cells.slice(COLS), ...newRowCells];
+
+    // Recalculate adjacency only for affected rows:
+    //   row 0  – lost its upper neighbors (old row 0 is gone)
+    //   row ROWS-2 – now borders the new bottom row
+    //   row ROWS-1 – freshly generated
+    recalcAdjacencyForRow(0);
+    recalcAdjacencyForRow(ROWS - 2);
+    recalcAdjacencyForRow(ROWS - 1);
+
+    // Mark new bottom-row cells reachable if adjacent to a revealed cell
+    updateReachabilityForRow(ROWS - 1);
+
+    renderGrid();
+    _cm = null; // invalidate position cache
+
+    updateHUD();
+    isScrolling = false;
+  }, 220);
 }
 
 function collectOre(idx) {
@@ -711,6 +811,7 @@ function collectOre(idx) {
   fxOre(idx);
   floatText(idx, `+${SCORE_ORE}`, '#00ffaa');
   updateHUD();
+  checkScrollTrigger(idx);
   checkWin();
 }
 
@@ -740,6 +841,7 @@ function hitBomb(idx) {
     setTimeout(() => endGame(false), 400);
   } else {
     floatText(idx, `💥 -1`, '#ff4400');
+    checkScrollTrigger(idx);
   }
 }
 
@@ -781,8 +883,8 @@ function endGame(won) {
     oIcon.textContent       = won ? '🏆' : '💥';
     oTitle.textContent      = won ? 'クリア！' : 'ゲームオーバー';
     oSub.textContent        = won
-      ? `全${oresTotal}個の鉱石を発掘した！`
-      : `爆弾を踏みすぎた…`;
+      ? `全${oresTotal}個の鉱石を発掘した！深度 ${worldDepth}m`
+      : `爆弾を踏みすぎた… 深度 ${worldDepth}m`;
     oScoreVal.textContent   = score;
     oTitle.style.color      = won ? '#4fc' : '#f54';
     overlayEl.classList.add('show');
@@ -893,6 +995,11 @@ const SFX = (() => {
     flag: () => {
       tone(600, 380, 'square', .06, .14);
       noise(.04, .06, .01, 2000);
+    },
+    // ゴゴゴ : scroll down (地面が落ちる音)
+    scroll: () => {
+      noise(.18, .22, 0, 120);
+      tone(90, 55, 'sawtooth', .18, .18);
     },
   };
 })();
